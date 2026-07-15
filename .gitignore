@@ -4,3 +4,6 @@ __pycache__/
 *.pt
 wandb/
 uv.lock
+outputs/
+assets/checkpoints/
+config/dream_eval.local.toml
