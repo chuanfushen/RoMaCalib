@@ -21,6 +21,8 @@ def benchmark_dataset(dataset_key: str) -> dict:
     config, _ = load_config()
     dataset = config["datasets"][dataset_key]
     evaluation = config["evaluation"]
+    refinement = config.get("refinement", {})
+    camera = config.get("camera", {})
     benchmark = Dream(
         data_root=project_path(dataset["path"]),
         prerender_root=project_path(config["paths"]["prerender_root"]) / dataset["name"],
@@ -32,8 +34,14 @@ def benchmark_dataset(dataset_key: str) -> dict:
         sample_count=evaluation["sample_count"],
         sample_seed=evaluation["sample_seed"],
         views=evaluation["views"],
+        width=refinement.get("process_width"),
+        height=refinement.get("process_height"),
         match_batch_size=evaluation["match_batch_size"],
         visual_geom_group=int(config.get("robot", {}).get("visual_geom_group", 2)),
+        source_visual_geom_group=config.get("robot", {}).get(
+            "source_visual_geom_group"
+        ),
+        visual_body_names=config.get("robot", {}).get("visual_body_names"),
         device=evaluation["device"],
         mask_input=evaluation["mask_input"],
         mask_prompt=evaluation["mask_prompt"],
@@ -41,6 +49,11 @@ def benchmark_dataset(dataset_key: str) -> dict:
         resume=evaluation["resume"],
         save_visualizations=evaluation["save_visualizations"],
         save_all_matches=evaluation["save_all_matches"],
+        refinement_enabled=bool(refinement.get("enabled", False)),
+        refine_iterations=int(refinement.get("iterations", 0)),
+        save_refinement_artifacts=bool(refinement.get("save_artifacts", True)),
+        distortion_state=str(camera.get("distortion_state", "unknown")),
+        distortion_coefficients=camera.get("distortion_coefficients"),
     )
     result = benchmark.benchmark(get_model(), model_name="RoMaV2")
     assert result["n_frames"] == evaluation["sample_count"]

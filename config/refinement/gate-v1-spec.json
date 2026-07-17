@@ -1,0 +1,193 @@
+{
+  "method_spec_id": "roma-pose-aligned-gate-v1",
+  "method_spec_schema_version": "1.0.0",
+  "evidence_schema_version": "1.0.0",
+  "trajectory_protocol_version": "1.0.0",
+  "pose_convention": {
+    "transform": "T_camera_from_robot_base",
+    "point_equation": "p_camera = R_camera_base @ p_base + t_camera_base",
+    "camera_center_base": "-R_camera_base.T @ t_camera_base"
+  },
+  "camera_contract": {
+    "processing_grid": "rectified_pinhole_for_matching_render_mesh_pick_pnp_and_gate",
+    "evaluation_grid": "raw_official_grid_with_K_raw_and_distortion_raw",
+    "distortion_state_values": [
+      "rectified",
+      "distorted",
+      "unknown"
+    ],
+    "unknown_distortion_policy": "configuration_error",
+    "rgb_resampling": "bilinear",
+    "mask_resampling": "nearest",
+    "v1_crop_policy": "forbidden",
+    "pixel_center": "opencv_integer_center"
+  },
+  "correspondence_pipeline": {
+    "matcher": "RoMaV2",
+    "max_keypoints": 2048,
+    "matcher_coordinates": "mkeypoints0_orig_and_mkeypoints1_orig_in_processing_input_grid",
+    "detect_threshold_cli": "unused_by_native_romav2_v1",
+    "match_threshold_cli": "unused_by_native_romav2_v1",
+    "score_filter_inclusive_min": 0.0,
+    "homography": {
+      "method": "CV2_USAC_MAGSAC",
+      "reprojection_threshold_processing_diagonal_ratio": 0.01,
+      "reference_pixels_at_640x480": 8.0,
+      "confidence": 0.9999,
+      "max_iterations": 10000,
+      "minimum_input_matches": 8,
+      "selected_mask": "homography_inlier_and_score_filter"
+    },
+    "mesh_pick": {
+      "source_pixels": "selected_render_pixels",
+      "world_frame": "robot_base_mujoco_world",
+      "validity": "mjv_select_hit_on_allowed_visual_geom_group_and_body_allowlist"
+    },
+    "top_k_before_pnp": {
+      "maximum": 512,
+      "order": "score_descending_then_original_match_index_ascending"
+    },
+    "deduplication": {
+      "space": "observed_processing_image_2d",
+      "greedy_order": "score_descending_then_original_match_index_ascending",
+      "radius_processing_diagonal_ratio": 0.00375,
+      "reference_pixels_at_640x480": 3.0,
+      "reject_condition": "squared_distance_strictly_less_than_radius_squared",
+      "preserve_source_geom_body_indices": true
+    },
+    "pnp": {
+      "algorithm": "cv2.solvePnPRansac",
+      "flags": "SOLVEPNP_EPNP",
+      "minimum_correspondences": 6,
+      "minimum_solver_inliers": 6,
+      "iterations": 10000,
+      "reprojection_threshold_processing_diagonal_ratio": 0.00625,
+      "reference_pixels_at_640x480": 5.0,
+      "confidence": 0.999,
+      "distortion": null,
+      "refinement": "cv2.solvePnPRefineLM_on_ransac_inliers"
+    },
+    "gate_inlier_set": "post_deduplication_solvePnPRansac_inliers_after_LM_pose_refinement"
+  },
+  "geometry_scale": {
+    "source": "all_surface_vertices_of_actual_allowed_rendered_and_pickable_visual_geometries_after_named_q_FK",
+    "primitive_policy": "use_exact_transformed_surface_extents_not_geom_centers",
+    "bounds": "axis_aligned_min_and_max_in_robot_base_frame",
+    "robot_radius": "0.5 * l2_norm(bounds_max - bounds_min)",
+    "finite_required": true,
+    "minimum_radius_m_exclusive": 1e-06,
+    "scope": "fixed_within_a_frame_across_all_iterations_and_variants"
+  },
+  "proper_se3": {
+    "shape": [
+      4,
+      4
+    ],
+    "all_finite": true,
+    "last_row": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "last_row_atol": 1e-06,
+    "rotation_orthogonality_frobenius_max": 0.0001,
+    "rotation_determinant_target": 1.0,
+    "rotation_determinant_atol": 0.0001
+  },
+  "evidence": {
+    "V": {
+      "all_required": [
+        "proper_se3",
+        "pnp_success",
+        "pnp_inliers >= 12",
+        "pnp_inliers / post_dedup_correspondences >= 0.10",
+        "candidate_positive_depth_inlier_ratio >= 0.95",
+        "candidate_LM_mean_inlier_reprojection_error / processing_image_diagonal <= 0.005"
+      ]
+    },
+    "O": {
+      "all_required": [
+        "observed_inlier_convex_hull_area / processing_image_area >= 0.005",
+        "sqrt(second_largest_eigenvalue(normalized_inlier_3d_covariance)) >= 0.02"
+      ],
+      "normalized_inlier_3d_covariance": "covariance((p_base - mean_p_base) / robot_radius)"
+    },
+    "L": {
+      "all_required": [
+        "relative_rotation_angle(candidate,parent) <= 20 degrees",
+        "camera_center_distance(candidate,parent) / robot_radius <= 0.25",
+        "observed_mask_unavailable OR candidate_mask_iou - parent_mask_iou >= -0.02"
+      ]
+    },
+    "canonical_accept": "V and O and L"
+  },
+  "mask_semantics": {
+    "observed_mask_unavailable": "skip_mask_term_for_correspondence_refinement",
+    "candidate_mask_is_rendered_from": "candidate_pose_after_pnp",
+    "candidate_mask_render_failure_when_variant_uses_iou": "reject_keep_parent",
+    "candidate_mask_render_failure_when_variant_does_not_use_iou": "diagnostic_unavailable_does_not_reject"
+  },
+  "trajectory": {
+    "maximum_attempts": 3,
+    "rejection_or_failure": "keep_parent_fill_all_remaining_outputs_and_stop",
+    "small_update": {
+      "rotation_deg_max": 0.1,
+      "camera_center_distance_over_robot_radius_max": 0.001,
+      "policy": "accept_candidate_fill_all_remaining_outputs_and_stop"
+    },
+    "two_cycle": {
+      "compare_candidate_to": "accepted_pose_two_steps_before_parent",
+      "rotation_deg_max": 0.1,
+      "camera_center_distance_over_robot_radius_max": 0.001,
+      "policy": "do_not_accept_cycle_candidate_keep_parent_fill_all_remaining_outputs_and_stop"
+    },
+    "stage1_missing": "all_refinement_outputs_unavailable"
+  },
+  "variants": {
+    "R3-G": {
+      "acceptance": "V_and_O_and_L",
+      "small_update_stop": true,
+      "two_cycle_stop": true
+    },
+    "R3-S": {
+      "acceptance": "pnp_success_and_proper_se3",
+      "description": "solver_only_no_quality_gate_with_safety_stopping",
+      "small_update_stop": true,
+      "two_cycle_stop": true
+    },
+    "R3-no-O": {
+      "acceptance": "V_and_L",
+      "small_update_stop": true,
+      "two_cycle_stop": true
+    },
+    "R3-no-trust": {
+      "acceptance": "V_and_O_and_L_without_rotation_or_camera_center_trust_region",
+      "small_update_stop": true,
+      "two_cycle_stop": true
+    },
+    "R3-no-IoU": {
+      "acceptance": "V_and_O_and_L_without_mask_term",
+      "small_update_stop": true,
+      "two_cycle_stop": true
+    }
+  },
+  "determinism": {
+    "seed": 20260717,
+    "python_random_seed": true,
+    "numpy_seed": true,
+    "torch_cpu_and_cuda_seed": true,
+    "opencv_rng_seed": true,
+    "opencv_num_threads": 1,
+    "torch_deterministic_algorithms": true,
+    "require_repeat_same_frame_test": true,
+    "bitwise_identity_if_backend_allows": true
+  },
+  "gt_policy": {
+    "used_for_candidate_generation": false,
+    "used_for_gate": false,
+    "used_for_early_stop": false,
+    "used_for_iteration_selection": false,
+    "post_hoc_evaluation_only": true
+  }
+}

@@ -17,6 +17,39 @@ DEFAULT_RANSAC_MAX_ITER = 10000
 DEFAULT_MIN_NUM_MATCHES = 4
 
 
+def normalize_visual_geom_group(
+    model,
+    source_visual_geom_group: int | None,
+    target_visual_geom_group: int = 2,
+) -> int:
+    """Remap imported visual geoms to the pipeline-standard group in memory."""
+    if source_visual_geom_group is None:
+        return 0
+    source = int(source_visual_geom_group)
+    target = int(target_visual_geom_group)
+    if source == target:
+        return 0
+    source_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_group[geom_id]) == source
+    ]
+    if not source_ids:
+        raise RuntimeError(f"No geometry found in imported visual group {source}")
+    target_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_group[geom_id]) == target
+    ]
+    if target_ids:
+        raise RuntimeError(
+            f"Cannot remap visual group {source} to non-empty target group {target}"
+        )
+    for geom_id in source_ids:
+        model.geom_group[geom_id] = target
+    return len(source_ids)
+
+
 def restrict_visual_geoms_to_bodies(
     model,
     body_names: list[str] | tuple[str, ...] | None,
@@ -60,20 +93,64 @@ def restrict_visual_geoms_to_bodies(
 def visual_bounds(model, data, visual_geom_group: int = 2) -> tuple[np.ndarray, np.ndarray]:
     import mujoco
 
-    chunks = []
+    minimum = np.full(3, np.inf, dtype=np.float64)
+    maximum = np.full(3, -np.inf, dtype=np.float64)
+    found = False
     for geom_id in range(model.ngeom):
-        if model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH or model.geom_group[geom_id] != visual_geom_group:
+        if model.geom_group[geom_id] != visual_geom_group:
             continue
-        mesh_id = model.geom_dataid[geom_id]
-        start = model.mesh_vertadr[mesh_id]
-        count = model.mesh_vertnum[mesh_id]
-        vertices = model.mesh_vert[start : start + count]
         rotation = data.geom_xmat[geom_id].reshape(3, 3)
-        chunks.append(vertices @ rotation.T + data.geom_xpos[geom_id])
-    if not chunks:
-        raise RuntimeError(f"The MuJoCo model has no group-{visual_geom_group} visual meshes")
-    vertices = np.concatenate(chunks)
-    return vertices.min(axis=0), vertices.max(axis=0)
+        position = np.asarray(data.geom_xpos[geom_id], dtype=np.float64)
+        geom_type = model.geom_type[geom_id]
+        if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
+            mesh_id = model.geom_dataid[geom_id]
+            start = model.mesh_vertadr[mesh_id]
+            count = model.mesh_vertnum[mesh_id]
+            vertices = model.mesh_vert[start : start + count]
+            world_vertices = vertices @ rotation.T + position
+            geom_minimum = world_vertices.min(axis=0)
+            geom_maximum = world_vertices.max(axis=0)
+        elif geom_type == mujoco.mjtGeom.mjGEOM_SPHERE:
+            local_extent = np.full(3, float(model.geom_size[geom_id, 0]))
+            world_extent = local_extent
+            geom_minimum = position - world_extent
+            geom_maximum = position + world_extent
+        elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+            local_extent = np.asarray(model.geom_size[geom_id, :3], dtype=np.float64)
+            world_extent = np.abs(rotation) @ local_extent
+            geom_minimum = position - world_extent
+            geom_maximum = position + world_extent
+        elif geom_type == mujoco.mjtGeom.mjGEOM_ELLIPSOID:
+            radii = np.asarray(model.geom_size[geom_id, :3], dtype=np.float64)
+            world_extent = np.sqrt(np.sum((rotation * radii[None, :]) ** 2, axis=1))
+            geom_minimum = position - world_extent
+            geom_maximum = position + world_extent
+        elif geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+            radius = float(model.geom_size[geom_id, 0])
+            half_length = float(model.geom_size[geom_id, 1])
+            radial_extent = radius * np.sqrt(
+                rotation[:, 0] ** 2 + rotation[:, 1] ** 2
+            )
+            world_extent = radial_extent + half_length * np.abs(rotation[:, 2])
+            geom_minimum = position - world_extent
+            geom_maximum = position + world_extent
+        elif geom_type == mujoco.mjtGeom.mjGEOM_CAPSULE:
+            radius = float(model.geom_size[geom_id, 0])
+            half_length = float(model.geom_size[geom_id, 1])
+            world_extent = radius + half_length * np.abs(rotation[:, 2])
+            geom_minimum = position - world_extent
+            geom_maximum = position + world_extent
+        else:
+            raise RuntimeError(
+                f"Unsupported group-{visual_geom_group} visual geom type "
+                f"{int(geom_type)} for exact surface bounds"
+            )
+        minimum = np.minimum(minimum, geom_minimum)
+        maximum = np.maximum(maximum, geom_maximum)
+        found = True
+    if not found:
+        raise RuntimeError(f"The MuJoCo model has no group-{visual_geom_group} visual geometry")
+    return minimum, maximum
 
 
 def subtree_visual_bounds(model, data, root_body_name: str, visual_geom_group: int = 2) -> tuple[np.ndarray, np.ndarray]:
@@ -565,8 +642,16 @@ def concatenate_visualizations(matching: np.ndarray, mesh: np.ndarray) -> np.nda
     return np.concatenate([pad(matching), separator, pad(mesh)], axis=1)
 
 
-def deduplicate_pnp_correspondences(image_points: np.ndarray, world_points: np.ndarray, scores: np.ndarray, radius: float = 3.0):
-    order = np.argsort(scores)[::-1]
+def deduplicate_pnp_correspondences(
+    image_points: np.ndarray,
+    world_points: np.ndarray,
+    scores: np.ndarray,
+    radius: float = 3.0,
+    *,
+    return_indices: bool = False,
+):
+    original_indices = np.arange(len(scores), dtype=np.int64)
+    order = np.lexsort((original_indices, -np.asarray(scores)))
     kept = []
     radius_squared = radius * radius
     for index in order:
@@ -574,13 +659,52 @@ def deduplicate_pnp_correspondences(image_points: np.ndarray, world_points: np.n
             continue
         kept.append(int(index))
     kept = np.asarray(kept, dtype=np.int64)
-    return image_points[kept], world_points[kept], scores[kept]
+    result = (image_points[kept], world_points[kept], scores[kept])
+    if return_indices:
+        return (*result, kept)
+    return result
 
 
-def solve_camera_pose(image_points: np.ndarray, world_points: np.ndarray, scores: np.ndarray, camera_matrix: np.ndarray, reprojection_threshold: float) -> dict:
-    image_points, world_points, scores = deduplicate_pnp_correspondences(image_points, world_points, scores)
+def solve_camera_pose(
+    image_points: np.ndarray,
+    world_points: np.ndarray,
+    scores: np.ndarray,
+    camera_matrix: np.ndarray,
+    reprojection_threshold: float,
+    *,
+    dedup_radius: float = 3.0,
+    source_indices: np.ndarray | None = None,
+    geom_ids: np.ndarray | None = None,
+    body_ids: np.ndarray | None = None,
+    rng_seed: int | None = None,
+) -> dict:
+    source_indices = np.arange(len(image_points), dtype=np.int64) if source_indices is None else np.asarray(source_indices)
+    geom_ids = np.full(len(image_points), -1, dtype=np.int32) if geom_ids is None else np.asarray(geom_ids)
+    body_ids = np.full(len(image_points), -1, dtype=np.int32) if body_ids is None else np.asarray(body_ids)
+    metadata_lengths = {
+        len(source_indices),
+        len(geom_ids),
+        len(body_ids),
+        len(image_points),
+        len(world_points),
+        len(scores),
+    }
+    if len(metadata_lengths) != 1:
+        raise ValueError("PnP correspondence arrays and source metadata must have equal length")
+    image_points, world_points, scores, kept = deduplicate_pnp_correspondences(
+        image_points,
+        world_points,
+        scores,
+        radius=dedup_radius,
+        return_indices=True,
+    )
+    source_indices = source_indices[kept]
+    geom_ids = geom_ids[kept]
+    body_ids = body_ids[kept]
     if len(image_points) < 6:
         raise RuntimeError(f"PnP needs at least 6 correspondences, found {len(image_points)}")
+    if rng_seed is not None:
+        cv2.setRNGSeed(int(rng_seed))
     success, rvec, tvec, inliers = cv2.solvePnPRansac(
         world_points.astype(np.float64),
         image_points.astype(np.float64),
@@ -620,6 +744,9 @@ def solve_camera_pose(image_points: np.ndarray, world_points: np.ndarray, scores
         "image_points": image_points,
         "world_points": world_points,
         "scores": scores,
+        "source_indices": source_indices,
+        "geom_ids": geom_ids,
+        "body_ids": body_ids,
         "inlier_indices": inlier_indices,
         "reprojection_errors": errors,
     }

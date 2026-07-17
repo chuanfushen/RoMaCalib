@@ -47,6 +47,9 @@ def run_prerender(config: dict, key: str, dry_run: bool = False) -> None:
     dataset = config["datasets"][key]
     render = config["prerender"]
     visual_geom_group = int(config.get("robot", {}).get("visual_geom_group", 2))
+    source_visual_geom_group = config.get("robot", {}).get(
+        "source_visual_geom_group"
+    )
     visual_body_names = list(config.get("robot", {}).get("visual_body_names", []))
     base_command = [
         sys.executable,
@@ -67,6 +70,10 @@ def run_prerender(config: dict, key: str, dry_run: bool = False) -> None:
     ]
     if visual_body_names:
         base_command.extend(["--visual-body-names", *map(str, visual_body_names)])
+    if source_visual_geom_group is not None:
+        base_command.extend(
+            ["--source-visual-geom-group", str(int(source_visual_geom_group))]
+        )
     if render.get("azimuths") is not None:
         base_command.extend(["--azimuths", *map(str, render["azimuths"])])
     workers = int(render.get("workers", 1))
@@ -82,7 +89,12 @@ def run_prerender(config: dict, key: str, dry_run: bool = False) -> None:
 def run_evaluation(config: dict, key: str, dry_run: bool = False) -> None:
     dataset = config["datasets"][key]
     evaluation = config["evaluation"]
+    refinement = config.get("refinement", {})
+    camera = config.get("camera", {})
     visual_geom_group = int(config.get("robot", {}).get("visual_geom_group", 2))
+    source_visual_geom_group = config.get("robot", {}).get(
+        "source_visual_geom_group"
+    )
     visual_body_names = list(config.get("robot", {}).get("visual_body_names", []))
     output_name = f"{dataset['name']}_sample{evaluation['sample_count']}"
     command = [
@@ -105,14 +117,59 @@ def run_evaluation(config: dict, key: str, dry_run: bool = False) -> None:
         flag(evaluation["save_visualizations"], "save-visualizations"),
         flag(evaluation["save_all_matches"], "save-all-matches"),
     ]
+    if config.get("_config_path") is not None:
+        command.extend(["--config-source", str(config["_config_path"])])
     if visual_body_names:
         command.extend(["--visual-body-names", *map(str, visual_body_names)])
+    if source_visual_geom_group is not None:
+        command.extend(
+            ["--source-visual-geom-group", str(int(source_visual_geom_group))]
+        )
+    if refinement.get("enabled", False):
+        process_width = int(
+            refinement.get("process_width", config["prerender"]["width"])
+        )
+        process_height = int(
+            refinement.get("process_height", config["prerender"]["height"])
+        )
+        command.extend(
+            [
+                "--refinement-enabled",
+                "--refine-iterations",
+                str(int(refinement.get("iterations", 0))),
+                flag(
+                    bool(refinement.get("save_artifacts", True)),
+                    "save-refinement-artifacts",
+                ),
+                "--distortion-state",
+                str(camera.get("distortion_state", "unknown")),
+                "--width",
+                str(process_width),
+                "--height",
+                str(process_height),
+            ]
+        )
+        if camera.get("distortion_coefficients") is not None:
+            command.extend(
+                [
+                    "--distortion-coefficients",
+                    *map(str, camera["distortion_coefficients"]),
+                ]
+            )
+        for key in ("fx", "fy", "cx", "cy"):
+            if camera.get(key) is not None:
+                command.extend([f"--{key}", str(camera[key])])
+        if camera.get("settings") is not None:
+            command.extend(
+                ["--camera-settings", str(project_path(camera["settings"]))]
+            )
     execute(command, dry_run)
 
 
 def main() -> None:
     args = parse_args()
     config, config_path = load_config(args.config)
+    config["_config_path"] = config_path
     datasets = args.datasets or config["evaluation"]["datasets"]
     print(f"Using config: {config_path}")
     for key in datasets:

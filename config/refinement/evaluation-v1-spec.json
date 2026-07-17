@@ -1,0 +1,90 @@
+{
+  "evaluation_spec_id": "refinement-evaluation-v1",
+  "schema_version": "1.0.0",
+  "failure_value_for_threshold_metrics": "positive_infinity",
+  "iteration_selection": "none_report_R1_R2_R3_and_use_R3-G_as_canonical",
+  "dataset_aggregation": "never_average_metrics_across_datasets",
+  "bootstrap": {
+    "type": "paired_percentile",
+    "replicates": 10000,
+    "confidence_level": 0.95,
+    "seed": 20260717
+  },
+  "datasets": {
+    "dream_real_franka": {
+      "status": "ready_after_metric_profile_and_raw_grid_contract",
+      "evaluation_object": "per_frame_mean_over_official_robot_keypoints",
+      "primary_endpoint": {
+        "name": "all_frame_ADD_AUC_at_0.1m",
+        "threshold_start_m": 0.0,
+        "threshold_stop_exclusive_m": 0.1,
+        "threshold_step_m": 0.0001,
+        "comparison": "less_than_or_equal",
+        "denominator": "all_requested_frames"
+      },
+      "primary_comparison": "R3-G_minus_S0",
+      "primary_success_rule": "lower_bound_of_paired_95_percent_bootstrap_CI_is_greater_than_zero",
+      "bootstrap_unit": "frame",
+      "catastrophic_absolute_event": "pnp_failure_or_per_frame_mean_keypoint_3d_error_m_greater_than_or_equal_to_0.1",
+      "catastrophic_regression_event": "S0_error_m_less_than_0.1_and_candidate_is_failure_or_candidate_error_m_greater_than_or_equal_to_0.1",
+      "secondary_safety_rules": [
+        "R3-G_catastrophic_absolute_rate_less_than_or_equal_to_S0",
+        "R3-G_catastrophic_regression_rate_less_than_or_equal_to_R3-S",
+        "R3-G_failure_rate_less_than_or_equal_to_S0"
+      ]
+    },
+    "ctrnet_baxter_real": {
+      "status": "ready_after_raw_grid_contract",
+      "evaluation_object": "single_official_virtual_left_end_effector_point",
+      "claim_boundary": "EE_point_calibration_consistency_not_full_6DoF_pose_correctness",
+      "primary_endpoint": {
+        "name": "official_ADD_AUC_at_400mm",
+        "integer_thresholds_mm": {
+          "start": 0,
+          "stop_inclusive": 399,
+          "step": 1
+        },
+        "comparison": "strictly_less_than",
+        "denominator": 100,
+        "range": "[0,1]"
+      },
+      "primary_comparison": "R3-G_minus_S0",
+      "primary_success_rule": "lower_bound_of_pose_cluster_paired_95_percent_bootstrap_CI_is_greater_than_zero",
+      "bootstrap_unit": "20_robot_poses_each_with_5_images",
+      "catastrophic_absolute_event": "pnp_failure_or_official_EE_3d_error_mm_greater_than_or_equal_to_100",
+      "catastrophic_regression_event": "S0_EE_3d_error_mm_less_than_100_and_candidate_is_failure_or_candidate_EE_3d_error_mm_greater_than_or_equal_to_100",
+      "secondary_safety_rules": [
+        "R3-G_catastrophic_absolute_rate_less_than_or_equal_to_S0",
+        "R3-G_catastrophic_regression_rate_less_than_or_equal_to_R3-S",
+        "R3-G_failure_rate_less_than_or_equal_to_S0"
+      ],
+      "secondary_official_metrics": [
+        "raw_grid_PCK_at_50px",
+        "raw_grid_PCK_AUC_at_200px",
+        "ADD_at_100mm"
+      ]
+    },
+    "ctrnet_x_franka": {
+      "status": "pending_remote_schema_GT_unit_distortion_and_session_audit",
+      "primary_endpoint": null,
+      "catastrophic_absolute_event": null,
+      "catastrophic_regression_event": null,
+      "policy": "must_create_evaluation-v2_or_dataset_profile_hash_before_any_formal_result"
+    }
+  },
+  "hard_gate_reporting": {
+    "operating_points": [
+      "gate-v1_fixed_point",
+      "solver-only_fixed_point"
+    ],
+    "required": [
+      "coverage",
+      "risk_at_fixed_point",
+      "accepted_update_precision_post_hoc",
+      "catastrophic_regression_recall_post_hoc",
+      "useful_update_retention_post_hoc"
+    ],
+    "risk_coverage_curve": "not_claimed_for_binary_gate_v1",
+    "post_hoc_margin_sweep": "diagnostic_only_and_not_used_for_selection"
+  }
+}

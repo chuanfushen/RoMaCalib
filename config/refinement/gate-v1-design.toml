@@ -1,0 +1,44 @@
+schema_version = 1
+gate_id = "gate-v1"
+status = "design_frozen"
+threshold_source = "analytic_preregistration"
+development_manifest = "none"
+development_gt_used = false
+real_test_gt_used = false
+
+[normalization]
+robot_radius_mode = "posed_visual_aabb_half_diagonal"
+reprojection_mode = "processing_image_diagonal"
+
+[validity]
+min_inliers = 12
+min_inlier_ratio = 0.10
+min_positive_depth_ratio = 0.95
+max_reprojection_mean_diagonal_ratio = 0.005
+se3_last_row_atol = 1.0e-6
+rotation_orthogonality_frobenius_max = 1.0e-4
+rotation_determinant_atol = 1.0e-4
+
+[observability]
+min_image_hull_area_ratio = 0.005
+min_world_second_spread_ratio = 0.02
+
+[local_consistency]
+max_rotation_delta_deg = 20.0
+max_camera_center_delta_ratio = 0.25
+max_mask_iou_drop = 0.02
+missing_observed_mask = "skip_mask_term"
+candidate_mask_render_failure_with_observed_mask = "reject"
+
+[early_stop]
+rotation_delta_deg = 0.10
+camera_center_delta_ratio = 0.001
+reject = true
+two_cycle = true
+
+[failure]
+missing_stage1_pose = "refinement_unavailable"
+pnp_failure = "reject_keep_parent"
+invalid_se3 = "reject_keep_parent"
+aligned_render_failure = "reject_keep_parent"
+missing_observed_mask_for_mask_fitting = "no_op_keep_stage1"

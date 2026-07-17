@@ -17,8 +17,12 @@ class Dream:
         sample_count: int | None = 300,
         sample_seed: int = 90,
         views: int = 6,
+        width: int | None = None,
+        height: int | None = None,
         match_batch_size: int = 6,
         visual_geom_group: int = 2,
+        source_visual_geom_group: int | None = None,
+        visual_body_names: tuple[str, ...] | list[str] | None = None,
         device: str = "cuda",
         mask_input: bool = True,
         mask_prompt: str = "robotic arm",
@@ -26,6 +30,11 @@ class Dream:
         resume: bool = False,
         save_visualizations: bool = True,
         save_all_matches: bool = True,
+        refinement_enabled: bool = False,
+        refine_iterations: int = 0,
+        save_refinement_artifacts: bool = True,
+        distortion_state: str = "unknown",
+        distortion_coefficients: tuple[float, ...] | list[float] | None = None,
     ) -> None:
         self.data_root = Path(data_root)
         self.prerender_root = Path(prerender_root)
@@ -34,8 +43,12 @@ class Dream:
         self.sample_count = sample_count
         self.sample_seed = sample_seed
         self.views = views
+        self.width = width
+        self.height = height
         self.match_batch_size = match_batch_size
         self.visual_geom_group = visual_geom_group
+        self.source_visual_geom_group = source_visual_geom_group
+        self.visual_body_names = visual_body_names
         self.device = device
         self.mask_input = mask_input
         self.mask_prompt = mask_prompt
@@ -43,6 +56,11 @@ class Dream:
         self.resume = resume
         self.save_visualizations = save_visualizations
         self.save_all_matches = save_all_matches
+        self.refinement_enabled = refinement_enabled
+        self.refine_iterations = refine_iterations
+        self.save_refinement_artifacts = save_refinement_artifacts
+        self.distortion_state = distortion_state
+        self.distortion_coefficients = distortion_coefficients
 
     def _args(self):
         from .utils.evaluator import parse_args
@@ -65,8 +83,41 @@ class Dream:
         ]
         if self.sample_count is not None:
             argv.extend(("--sample-count", str(self.sample_count)))
+        if self.width is not None:
+            argv.extend(("--width", str(self.width)))
+        if self.height is not None:
+            argv.extend(("--height", str(self.height)))
+        if self.visual_body_names:
+            argv.extend(("--visual-body-names", *map(str, self.visual_body_names)))
+        if self.source_visual_geom_group is not None:
+            argv.extend(
+                (
+                    "--source-visual-geom-group",
+                    str(self.source_visual_geom_group),
+                )
+            )
         if self.sam3_checkpoint is not None:
             argv.extend(("--sam3-checkpoint", str(self.sam3_checkpoint)))
+        if self.refinement_enabled:
+            argv.extend(
+                (
+                    "--refinement-enabled",
+                    "--refine-iterations",
+                    str(self.refine_iterations),
+                    "--distortion-state",
+                    self.distortion_state,
+                    "--save-refinement-artifacts"
+                    if self.save_refinement_artifacts
+                    else "--no-save-refinement-artifacts",
+                )
+            )
+            if self.distortion_coefficients is not None:
+                argv.extend(
+                    (
+                        "--distortion-coefficients",
+                        *map(str, self.distortion_coefficients),
+                    )
+                )
         return parse_args(argv)
 
     def benchmark(self, model, model_name=None) -> dict:

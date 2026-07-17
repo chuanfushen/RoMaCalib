@@ -41,6 +41,7 @@ from .geometry import (  # noqa: E402
     add_zed_camera,
     draw_matches,
     imcui_keypoint_ransac_mask,
+    normalize_visual_geom_group,
     restrict_visual_geoms_to_bodies,
     select_rendered_mesh_points,
     solve_camera_pose,
@@ -48,6 +49,7 @@ from .geometry import (  # noqa: E402
     visual_scene_option,
 )
 from .render import apply_json_qpos, load_joint_positions  # noqa: E402
+from .refinement import CameraModel  # noqa: E402
 
 DEFAULT_FRAME_JSON = Path(
     "/LargeModelDev/users/chuanfu.shen/workspace/paper/calib/dream-data/real/"
@@ -184,6 +186,59 @@ def load_camera_matrix(args: argparse.Namespace, image_shape: tuple[int, int, in
     )
 
 
+def load_raw_distortion(args: argparse.Namespace) -> np.ndarray | None:
+    values = getattr(args, "distortion_coefficients", None)
+    if values is not None:
+        return np.asarray(values, dtype=np.float64).reshape(-1)
+
+    settings_path = args.camera_settings
+    if settings_path is None:
+        candidate = args.json.with_name("_camera_settings.json")
+        if candidate.is_file():
+            settings_path = candidate
+    if settings_path is None or not settings_path.is_file():
+        return None
+
+    payload = json.loads(settings_path.read_text())
+    settings = payload["camera_settings"][0]
+    intrinsic = settings["intrinsic_settings"]
+    for container in (intrinsic, settings):
+        for key in ("distortion_coefficients", "distortion"):
+            if key not in container:
+                continue
+            distortion = container[key]
+            if isinstance(distortion, dict):
+                return np.asarray(
+                    [
+                        distortion.get("k1", 0.0),
+                        distortion.get("k2", 0.0),
+                        distortion.get("p1", 0.0),
+                        distortion.get("p2", 0.0),
+                        distortion.get("k3", 0.0),
+                    ],
+                    dtype=np.float64,
+                )
+            return np.asarray(distortion, dtype=np.float64).reshape(-1)
+    coefficient_names = ("k1", "k2", "p1", "p2", "k3")
+    if any(name in intrinsic for name in coefficient_names):
+        return np.asarray([intrinsic.get(name, 0.0) for name in coefficient_names], dtype=np.float64)
+    return None
+
+
+def load_camera_model(
+    args: argparse.Namespace,
+    raw_image_shape: tuple[int, int, int],
+    process_size: tuple[int, int],
+) -> CameraModel:
+    return CameraModel.create(
+        raw_size=raw_image_shape[:2],
+        process_size=process_size,
+        K_raw=load_camera_matrix(args, raw_image_shape),
+        distortion_raw=load_raw_distortion(args),
+        distortion_state=args.distortion_state,
+    )
+
+
 def dream_keypoints(payload: dict) -> list[dict]:
     objects = payload.get("objects", [])
     if not objects:
@@ -297,14 +352,32 @@ def dream_camera_location_scale(payload: dict) -> float:
     return 0.01 if float(np.median(norms)) > 10.0 else 1.0
 
 
-def keypoint_metrics(payload: dict, fk_points: dict[str, np.ndarray], pose: dict, camera_matrix: np.ndarray) -> dict:
+def keypoint_metrics(
+    payload: dict,
+    fk_points: dict[str, np.ndarray],
+    pose: dict,
+    camera_matrix: np.ndarray,
+    camera_model: CameraModel | None = None,
+) -> dict:
     rows = []
     gt_camera_scale = dream_camera_location_scale(payload)
     for keypoint in dream_keypoints(payload):
         name = keypoint["name"]
         if name not in fk_points or "projected_location" not in keypoint:
             continue
-        pred_px, pred_cam = project_points(fk_points[name][None], pose["world_to_camera"], camera_matrix)
+        if camera_model is None:
+            pred_px, pred_cam = project_points(
+                fk_points[name][None],
+                pose["world_to_camera"],
+                camera_matrix,
+            )
+            projection_grid = "processing"
+        else:
+            pred_px, pred_cam = camera_model.project_raw(
+                fk_points[name][None],
+                pose["world_to_camera"],
+            )
+            projection_grid = "raw_official"
         gt_px = np.asarray(keypoint["projected_location"], dtype=np.float64)
         gt_cam = np.asarray(keypoint.get("location", [np.nan, np.nan, np.nan]), dtype=np.float64) * gt_camera_scale
         pixel_error = float(np.linalg.norm(pred_px[0] - gt_px))
@@ -318,6 +391,7 @@ def keypoint_metrics(payload: dict, fk_points: dict[str, np.ndarray], pose: dict
                 "predicted_camera_xyz": pred_cam[0].tolist(),
                 "gt_camera_xyz": gt_cam.tolist(),
                 "camera_3d_error_m": camera_error,
+                "projection_grid": projection_grid,
             }
         )
 
@@ -326,6 +400,7 @@ def keypoint_metrics(payload: dict, fk_points: dict[str, np.ndarray], pose: dict
     valid_camera_errors = camera_errors[np.isfinite(camera_errors)]
     summary = {
         "keypoint_count": len(rows),
+        "pixel_projection_grid": "processing" if camera_model is None else "raw_official",
         "gt_camera_location_scale": float(gt_camera_scale),
         "pixel_error_mean": float(pixel_errors.mean()) if len(pixel_errors) else float("nan"),
         "pixel_error_median": float(np.median(pixel_errors)) if len(pixel_errors) else float("nan"),
@@ -362,6 +437,7 @@ def make_model_and_data(
     payload: dict,
     visual_body_names: list[str] | tuple[str, ...] | None = None,
     visual_geom_group: int = 2,
+    source_visual_geom_group: int | None = None,
 ):
     import mujoco
 
@@ -370,6 +446,11 @@ def make_model_and_data(
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, height)
     add_zed_camera(spec, "zed_render_camera", width, height, camera_matrix)
     model = spec.compile()
+    normalize_visual_geom_group(
+        model,
+        source_visual_geom_group,
+        visual_geom_group,
+    )
     restrict_visual_geoms_to_bodies(model, visual_body_names, visual_geom_group)
     data = mujoco.MjData(model)
     mujoco.mj_resetData(model, data)
@@ -448,6 +529,148 @@ def render_orbit_views(model, data, args: argparse.Namespace, camera_matrix: np.
     return render_paths
 
 
+def opencv_pose_to_mujoco_camera(world_to_camera: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Convert OpenCV ``T_camera<-base`` to MuJoCo camera position/quaternion."""
+    import mujoco
+
+    transform = np.asarray(world_to_camera, dtype=np.float64)
+    if transform.shape != (4, 4):
+        raise ValueError("world_to_camera must be 4x4")
+    camera_to_world_rotation = transform[:3, :3].T
+    camera_position = -camera_to_world_rotation @ transform[:3, 3]
+    right = camera_to_world_rotation[:, 0]
+    up = -camera_to_world_rotation[:, 1]
+    backward = -camera_to_world_rotation[:, 2]
+    mujoco_rotation = np.column_stack([right, up, backward])
+    camera_quaternion = np.empty(4, dtype=np.float64)
+    mujoco.mju_mat2Quat(camera_quaternion, mujoco_rotation.reshape(-1))
+    return camera_position, camera_quaternion
+
+
+def mujoco_camera_to_opencv_pose(
+    camera_position: np.ndarray,
+    camera_quaternion: np.ndarray,
+) -> np.ndarray:
+    """Convert a MuJoCo camera pose back to OpenCV ``T_camera<-base``."""
+    import mujoco
+
+    mujoco_rotation = np.empty(9, dtype=np.float64)
+    mujoco.mju_quat2Mat(mujoco_rotation, np.asarray(camera_quaternion, dtype=np.float64))
+    mujoco_rotation = mujoco_rotation.reshape(3, 3)
+    camera_to_world_rotation = np.column_stack(
+        [mujoco_rotation[:, 0], -mujoco_rotation[:, 1], -mujoco_rotation[:, 2]]
+    )
+    world_to_camera = np.eye(4, dtype=np.float64)
+    world_to_camera[:3, :3] = camera_to_world_rotation.T
+    world_to_camera[:3, 3] = (
+        -camera_to_world_rotation.T @ np.asarray(camera_position, dtype=np.float64)
+    )
+    return world_to_camera
+
+
+def _render_mujoco_camera_artifacts(
+    model,
+    data,
+    args: argparse.Namespace,
+    camera_matrix: np.ndarray,
+    output_dir: Path,
+    camera_position: np.ndarray,
+    camera_quaternion: np.ndarray,
+    *,
+    stem: str,
+    save_rgb: bool,
+) -> tuple[Path | None, Path, Path, np.ndarray]:
+    import mujoco
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "zed_render_camera")
+    model.cam_pos[camera_id] = np.asarray(camera_position, dtype=np.float64)
+    model.cam_quat[camera_id] = np.asarray(camera_quaternion, dtype=np.float64)
+    mujoco.mj_forward(model, data)
+    scene_option = visual_scene_option(args.visual_geom_group)
+    renderer = mujoco.Renderer(model, height=args.height, width=args.width)
+    try:
+        renderer.update_scene(data, camera=camera_id, scene_option=scene_option)
+        rgb = renderer.render().copy() if save_rgb else None
+        renderer.enable_segmentation_rendering()
+        segmentation = renderer.render().copy()
+        renderer.disable_segmentation_rendering()
+    finally:
+        renderer.close()
+
+    render_mask = segmentation[..., 0] >= 0
+    image_path = output_dir / f"{stem}.png" if save_rgb else None
+    mask_path = output_dir / f"{stem}_mask.png"
+    camera_path = output_dir / f"{stem}_camera.npz"
+    if image_path is not None:
+        Image.fromarray(rgb).save(image_path)
+    Image.fromarray(render_mask.astype(np.uint8) * 255).save(mask_path)
+    np.savez_compressed(
+        camera_path,
+        camera_position=data.cam_xpos[camera_id].copy(),
+        camera_rotation=data.cam_xmat[camera_id].reshape(3, 3).copy(),
+        camera_forward=-data.cam_xmat[camera_id].reshape(3, 3)[:, 2],
+        camera_up=data.cam_xmat[camera_id].reshape(3, 3)[:, 1],
+        camera_quaternion=np.asarray(camera_quaternion, dtype=np.float64),
+        image_height=args.height,
+        image_width=args.width,
+        zed_camera_matrix=camera_matrix,
+        camera_source="pose_aligned_opencv_T_camera_from_robot_base",
+    )
+    return image_path, mask_path, camera_path, render_mask
+
+
+def render_pose_aligned_artifacts(
+    model,
+    data,
+    args: argparse.Namespace,
+    camera_matrix: np.ndarray,
+    world_to_camera: np.ndarray,
+    output_dir: Path,
+    *,
+    stem: str = "render",
+) -> tuple[Path, Path, Path, np.ndarray]:
+    camera_position, camera_quaternion = opencv_pose_to_mujoco_camera(world_to_camera)
+    image_path, mask_path, camera_path, render_mask = _render_mujoco_camera_artifacts(
+        model,
+        data,
+        args,
+        camera_matrix,
+        output_dir,
+        camera_position,
+        camera_quaternion,
+        stem=stem,
+        save_rgb=True,
+    )
+    assert image_path is not None
+    return image_path, mask_path, camera_path, render_mask
+
+
+def render_pose_mask(
+    model,
+    data,
+    args: argparse.Namespace,
+    camera_matrix: np.ndarray,
+    world_to_camera: np.ndarray,
+    output_dir: Path,
+    *,
+    stem: str = "candidate_render",
+) -> tuple[Path, Path, np.ndarray]:
+    camera_position, camera_quaternion = opencv_pose_to_mujoco_camera(world_to_camera)
+    _, mask_path, camera_path, render_mask = _render_mujoco_camera_artifacts(
+        model,
+        data,
+        args,
+        camera_matrix,
+        output_dir,
+        camera_position,
+        camera_quaternion,
+        stem=stem,
+        save_rgb=False,
+    )
+    return mask_path, camera_path, render_mask
+
+
 def match_one_render(
     observed_rgb: np.ndarray,
     render_path: Path,
@@ -459,6 +682,7 @@ def match_one_render(
     output_dir: Path,
     prediction: dict | None = None,
     render_rgb: np.ndarray | None = None,
+    artifact_stem: str | None = None,
 ) -> dict:
     if render_rgb is None:
         render_rgb = np.asarray(Image.open(render_path).convert("RGB"))
@@ -488,14 +712,22 @@ def match_one_render(
     )
     mesh_hit_indices = selected_indices[valid_surface]
     image_points = points0[mesh_hit_indices]
+    render_points = points1[mesh_hit_indices]
     mesh_points = world_points[valid_surface]
     mesh_scores = scores[mesh_hit_indices]
+    mesh_source_indices = mesh_hit_indices.astype(np.int64)
+    mesh_geom_ids = geom_ids[valid_surface]
+    mesh_body_ids = body_ids[valid_surface]
     max_pnp_correspondences = getattr(args, "max_pnp_correspondences", None)
     if max_pnp_correspondences is not None and len(image_points) > max_pnp_correspondences:
-        keep = np.argsort(mesh_scores)[-int(max_pnp_correspondences) :]
+        keep = np.lexsort((mesh_source_indices, -mesh_scores))[: int(max_pnp_correspondences)]
         image_points = image_points[keep]
+        render_points = render_points[keep]
         mesh_points = mesh_points[keep]
         mesh_scores = mesh_scores[keep]
+        mesh_source_indices = mesh_source_indices[keep]
+        mesh_geom_ids = mesh_geom_ids[keep]
+        mesh_body_ids = mesh_body_ids[keep]
 
     view_record = {
         "render_path": str(render_path),
@@ -510,28 +742,33 @@ def match_one_render(
     }
 
     if args.save_all_matches:
-        stem = render_path.stem
+        stem = render_path.stem if artifact_stem is None else artifact_stem
         match_vis = draw_matches(
             observed_rgb,
             render_rgb,
             image_points,
-            points1[mesh_hit_indices],
+            render_points,
             mesh_scores,
             f"{stem} raw={len(points0)} ransac={int(geometric.sum())} mesh={len(mesh_points)}",
         )
-        Image.fromarray(match_vis).save(output_dir / f"{stem}_matches.jpg", quality=92)
+        image_name = f"{stem}_matches.jpg" if artifact_stem is None else f"{stem}.jpg"
+        npz_name = f"{stem}_matches.npz" if artifact_stem is None else f"{stem}.npz"
+        Image.fromarray(match_vis).save(output_dir / image_name, quality=92)
         np.savez_compressed(
-            output_dir / f"{stem}_matches.npz",
+            output_dir / npz_name,
             points0=points0,
             points1=points1,
             scores=scores,
             ransac_inliers=geometric,
             selected=selected,
             image_points=image_points,
+            render_points=render_points,
             world_points=mesh_points,
             mesh_scores=mesh_scores,
-            geom_ids=geom_ids,
-            body_ids=body_ids,
+            source_indices=mesh_source_indices,
+            geom_ids=mesh_geom_ids,
+            body_ids=mesh_body_ids,
+            rng_seed=getattr(args, "opencv_rng_seed", None),
         )
 
     if len(image_points) < args.min_pnp_correspondences:
@@ -539,19 +776,47 @@ def match_one_render(
         return {**view_record, "_image_points": image_points, "_world_points": mesh_points, "_scores": mesh_scores}
 
     try:
-        pose = solve_camera_pose(image_points, mesh_points, mesh_scores, camera_matrix, args.pnp_threshold)
+        pose = solve_camera_pose(
+            image_points,
+            mesh_points,
+            mesh_scores,
+            camera_matrix,
+            args.pnp_threshold,
+            dedup_radius=getattr(args, "pnp_dedup_radius", 3.0),
+            source_indices=mesh_source_indices,
+            geom_ids=mesh_geom_ids,
+            body_ids=mesh_body_ids,
+        )
     except (RuntimeError, cv2.error) as error:
         view_record["pnp"] = {"status": "failed", "error": str(error), "correspondences": int(len(image_points))}
         return {**view_record, "_image_points": image_points, "_world_points": mesh_points, "_scores": mesh_scores}
 
     inlier_errors = pose["reprojection_errors"][pose["inlier_indices"]]
+    inlier_body_ids = pose["body_ids"][pose["inlier_indices"]]
+    inlier_world_points = pose["world_points"][pose["inlier_indices"]]
+    import mujoco
+
+    body_distribution = {}
+    for body_id in inlier_body_ids:
+        body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(body_id))
+        key = body_name if body_name is not None else f"body_{int(body_id)}"
+        body_distribution[key] = body_distribution.get(key, 0) + 1
+    if len(inlier_world_points) >= 2:
+        centered = inlier_world_points - inlier_world_points.mean(axis=0)
+        singular_values = np.linalg.svd(centered, compute_uv=False)
+    else:
+        singular_values = np.zeros(3, dtype=np.float64)
     view_record["pnp"] = {
         "status": "success",
         "correspondences": int(len(pose["image_points"])),
         "inliers": int(len(pose["inlier_indices"])),
+        "inlier_ratio": float(len(pose["inlier_indices"]) / len(pose["image_points"])),
         "inlier_reprojection_error_mean": float(inlier_errors.mean()),
         "inlier_reprojection_error_median": float(np.median(inlier_errors)),
         "inlier_reprojection_error_max": float(inlier_errors.max()),
+        "inlier_body_distribution": body_distribution,
+        "inlier_world_axis_span_m": np.ptp(inlier_world_points, axis=0).tolist(),
+        "inlier_world_singular_values_m": singular_values.tolist(),
         "world_to_camera": pose["world_to_camera"].tolist(),
         "camera_to_robot_base": pose["camera_to_world"].tolist(),
     }
@@ -570,9 +835,16 @@ def best_view_key(record: dict) -> tuple:
     )
 
 
-def save_pose_npz(output_dir: Path, best: dict, camera_matrix: np.ndarray, metrics: dict) -> Path:
+def save_pose_npz(
+    output_dir: Path,
+    best: dict,
+    camera_matrix: np.ndarray,
+    metrics: dict,
+    *,
+    filename: str = "best_pose.npz",
+) -> Path:
     pose = best["_pose"]
-    path = output_dir / "best_pose.npz"
+    path = output_dir / filename
     np.savez_compressed(
         path,
         world_to_camera=pose["world_to_camera"],
@@ -580,6 +852,9 @@ def save_pose_npz(output_dir: Path, best: dict, camera_matrix: np.ndarray, metri
         image_points=pose["image_points"],
         world_points=pose["world_points"],
         scores=pose["scores"],
+        source_indices=pose.get("source_indices", np.arange(len(pose["image_points"]))),
+        geom_ids=pose.get("geom_ids", np.full(len(pose["image_points"]), -1)),
+        body_ids=pose.get("body_ids", np.full(len(pose["image_points"]), -1)),
         inlier_indices=pose["inlier_indices"],
         reprojection_errors=pose["reprojection_errors"],
         camera_matrix=camera_matrix,

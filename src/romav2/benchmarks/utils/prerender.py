@@ -21,7 +21,13 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from .geometry import add_zed_camera, restrict_visual_geoms_to_bodies, visual_bounds, visual_scene_option  # noqa: E402
+from .geometry import (  # noqa: E402
+    add_zed_camera,
+    normalize_visual_geom_group,
+    restrict_visual_geoms_to_bodies,
+    visual_bounds,
+    visual_scene_option,
+)
 from .pose import load_camera_matrix  # noqa: E402
 from .render import apply_json_qpos, load_joint_positions  # noqa: E402
 
@@ -73,6 +79,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dataset-dir", type=Path, default=DEFAULT_DATASET_DIR)
     parser.add_argument("--mujoco-xml", type=Path, default=DEFAULT_MJCF)
     parser.add_argument("--visual-geom-group", type=int, default=2, help="MuJoCo geom group containing renderable visual meshes.")
+    parser.add_argument(
+        "--source-visual-geom-group",
+        type=int,
+        default=None,
+        help="Optional imported visual group remapped in memory to --visual-geom-group.",
+    )
     parser.add_argument(
         "--visual-body-names",
         nargs="*",
@@ -155,6 +167,11 @@ def compile_model(args: argparse.Namespace, camera_matrix: np.ndarray):
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, args.height)
     add_zed_camera(spec, "zed_render_camera", args.width, args.height, camera_matrix)
     model = spec.compile()
+    normalize_visual_geom_group(
+        model,
+        args.source_visual_geom_group,
+        args.visual_geom_group,
+    )
     restrict_visual_geoms_to_bodies(model, args.visual_body_names, args.visual_geom_group)
     data = mujoco.MjData(model)
     return model, data

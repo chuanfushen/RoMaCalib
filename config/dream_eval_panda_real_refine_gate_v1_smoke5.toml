@@ -1,0 +1,54 @@
+# Canonical gate-v1 smoke test for DREAM real Panda (Azure camera).
+# Server-local paths are supplied through DREAM_* environment overrides.
+# The output roots are unique to server B and do not overlap historical runs.
+
+[robot]
+visual_geom_group = 2
+
+[paths]
+data_root = "data/dream"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/dream_panda_real_refine_gate_v1_smoke5_sB_prerendered_views"
+output_root = "outputs/dream_panda_real_refine_gate_v1_smoke5_sB_match_eval"
+
+[datasets.real]
+enabled = true
+name = "panda-3cam_azure"
+path = "panda-3cam_azure"
+
+[camera]
+# The dataset publishes no distortion coefficients. Across the five fixed
+# smoke frames, all 35 official 3D keypoints project through the published
+# pinhole intrinsics with max residual 6.36e-14 px.
+distortion_state = "rectified"
+
+[evaluation]
+datasets = ["real"]
+sample_count = 5
+sample_seed = 90
+views = 6
+match_batch_size = 6
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = true
+save_visualizations = true
+save_all_matches = true
+
+[refinement]
+enabled = true
+iterations = 3
+save_artifacts = true
+process_width = 640
+process_height = 480
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 2.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0
