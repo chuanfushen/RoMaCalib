@@ -1,0 +1,52 @@
+# Server-B memory-control rerun of the canonical DREAM real Panda smoke.
+# The only evaluation change from the batch6 run is match_batch_size = 1.
+# Pre-rendered views are reused because data, sample, seed, model, camera,
+# image size, views, and all rendering parameters are identical.
+
+[robot]
+visual_geom_group = 2
+
+[paths]
+data_root = "data/dream"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/dream_panda_real_refine_gate_v1_smoke5_sB_prerendered_views"
+output_root = "outputs/dream_panda_real_refine_gate_v1_smoke5_sB_batch1_match_eval"
+
+[datasets.real]
+enabled = true
+name = "panda-3cam_azure"
+path = "panda-3cam_azure"
+
+[camera]
+distortion_state = "rectified"
+
+[evaluation]
+datasets = ["real"]
+sample_count = 5
+sample_seed = 90
+views = 6
+match_batch_size = 1
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = true
+save_visualizations = true
+save_all_matches = true
+
+[refinement]
+enabled = true
+iterations = 3
+save_artifacts = true
+process_width = 640
+process_height = 480
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 2.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0
