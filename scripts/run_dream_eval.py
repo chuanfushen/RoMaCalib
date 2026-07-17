@@ -46,11 +46,14 @@ def execute_many(commands: list[list[str]], dry_run: bool) -> None:
 def run_prerender(config: dict, key: str, dry_run: bool = False) -> None:
     dataset = config["datasets"][key]
     render = config["prerender"]
+    visual_geom_group = int(config.get("robot", {}).get("visual_geom_group", 2))
+    visual_body_names = list(config.get("robot", {}).get("visual_body_names", []))
     base_command = [
         sys.executable,
         "-m", "romav2.benchmarks.utils.prerender",
         "--dataset-dir", str(project_path(dataset["path"])),
         "--mujoco-xml", str(project_path(config["paths"]["mujoco_xml"])),
+        "--visual-geom-group", str(visual_geom_group),
         "--output-dir", str(project_path(config["paths"]["prerender_root"]) / dataset["name"]),
         "--views", str(config["evaluation"]["views"]),
         "--width", str(render["width"]),
@@ -59,7 +62,13 @@ def run_prerender(config: dict, key: str, dry_run: bool = False) -> None:
         "--min-distance", str(render["min_distance"]),
         "--elevation", str(render["elevation"]),
         "--azimuth-offset", str(render["azimuth_offset"]),
+        "--sample-count", str(config["evaluation"]["sample_count"]),
+        "--sample-seed", str(config["evaluation"]["sample_seed"]),
     ]
+    if visual_body_names:
+        base_command.extend(["--visual-body-names", *map(str, visual_body_names)])
+    if render.get("azimuths") is not None:
+        base_command.extend(["--azimuths", *map(str, render["azimuths"])])
     workers = int(render.get("workers", 1))
     if workers < 1:
         raise ValueError("prerender.workers must be >= 1")
@@ -73,12 +82,15 @@ def run_prerender(config: dict, key: str, dry_run: bool = False) -> None:
 def run_evaluation(config: dict, key: str, dry_run: bool = False) -> None:
     dataset = config["datasets"][key]
     evaluation = config["evaluation"]
+    visual_geom_group = int(config.get("robot", {}).get("visual_geom_group", 2))
+    visual_body_names = list(config.get("robot", {}).get("visual_body_names", []))
     output_name = f"{dataset['name']}_sample{evaluation['sample_count']}"
     command = [
         sys.executable,
         "-m", "romav2.benchmarks.utils.evaluator",
         "--dataset-dir", str(project_path(dataset["path"])),
         "--mujoco-xml", str(project_path(config["paths"]["mujoco_xml"])),
+        "--visual-geom-group", str(visual_geom_group),
         "--prerender-dir", str(project_path(config["paths"]["prerender_root"]) / dataset["name"]),
         "--output-dir", str(project_path(config["paths"]["output_root"]) / output_name),
         "--sam3-checkpoint", str(project_path(config["paths"]["sam3_checkpoint"])),
@@ -93,6 +105,8 @@ def run_evaluation(config: dict, key: str, dry_run: bool = False) -> None:
         flag(evaluation["save_visualizations"], "save-visualizations"),
         flag(evaluation["save_all_matches"], "save-all-matches"),
     ]
+    if visual_body_names:
+        command.extend(["--visual-body-names", *map(str, visual_body_names)])
     execute(command, dry_run)
 
 

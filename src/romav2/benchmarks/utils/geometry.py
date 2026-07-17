@@ -16,12 +16,53 @@ DEFAULT_RANSAC_CONFIDENCE = 0.9999
 DEFAULT_RANSAC_MAX_ITER = 10000
 DEFAULT_MIN_NUM_MATCHES = 4
 
-def visual_bounds(model, data) -> tuple[np.ndarray, np.ndarray]:
+
+def restrict_visual_geoms_to_bodies(
+    model,
+    body_names: list[str] | tuple[str, ...] | None,
+    visual_geom_group: int = 2,
+) -> list[str]:
+    """Hide visual geoms outside an exact body-name allowlist.
+
+    The model is modified in place so rendering, visual bounds, and
+    ``mjv_select`` all see the same set of robot surfaces.
+    """
+    if not body_names:
+        return []
+
+    import mujoco
+
+    names = list(dict.fromkeys(str(name) for name in body_names))
+    body_ids = {}
+    for name in names:
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+        if body_id < 0:
+            raise ValueError(f"Visual body {name!r} was not found in the MuJoCo model")
+        body_ids[name] = int(body_id)
+
+    allowed_ids = set(body_ids.values())
+    hidden_group = (int(visual_geom_group) + 1) % 6
+    kept = 0
+    for geom_id in range(model.ngeom):
+        if int(model.geom_group[geom_id]) != int(visual_geom_group):
+            continue
+        if int(model.geom_bodyid[geom_id]) in allowed_ids:
+            kept += 1
+        else:
+            model.geom_group[geom_id] = hidden_group
+    if kept == 0:
+        raise RuntimeError(
+            f"None of the requested bodies has a geom in visual group {visual_geom_group}: {names}"
+        )
+    return names
+
+
+def visual_bounds(model, data, visual_geom_group: int = 2) -> tuple[np.ndarray, np.ndarray]:
     import mujoco
 
     chunks = []
     for geom_id in range(model.ngeom):
-        if model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH or model.geom_group[geom_id] != 2:
+        if model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH or model.geom_group[geom_id] != visual_geom_group:
             continue
         mesh_id = model.geom_dataid[geom_id]
         start = model.mesh_vertadr[mesh_id]
@@ -30,12 +71,12 @@ def visual_bounds(model, data) -> tuple[np.ndarray, np.ndarray]:
         rotation = data.geom_xmat[geom_id].reshape(3, 3)
         chunks.append(vertices @ rotation.T + data.geom_xpos[geom_id])
     if not chunks:
-        raise RuntimeError("The MuJoCo model has no group-2 visual meshes")
+        raise RuntimeError(f"The MuJoCo model has no group-{visual_geom_group} visual meshes")
     vertices = np.concatenate(chunks)
     return vertices.min(axis=0), vertices.max(axis=0)
 
 
-def subtree_visual_bounds(model, data, root_body_name: str) -> tuple[np.ndarray, np.ndarray]:
+def subtree_visual_bounds(model, data, root_body_name: str, visual_geom_group: int = 2) -> tuple[np.ndarray, np.ndarray]:
     import mujoco
 
     root_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root_body_name)
@@ -53,7 +94,7 @@ def subtree_visual_bounds(model, data, root_body_name: str) -> tuple[np.ndarray,
     for geom_id in range(model.ngeom):
         if (
             model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH
-            or model.geom_group[geom_id] != 2
+            or model.geom_group[geom_id] != visual_geom_group
             or not belongs_to_subtree(int(model.geom_bodyid[geom_id]))
         ):
             continue
@@ -64,9 +105,20 @@ def subtree_visual_bounds(model, data, root_body_name: str) -> tuple[np.ndarray,
         rotation = data.geom_xmat[geom_id].reshape(3, 3)
         chunks.append(vertices @ rotation.T + data.geom_xpos[geom_id])
     if not chunks:
-        raise RuntimeError(f"Body subtree {root_body_name!r} has no group-2 visual meshes")
+        raise RuntimeError(f"Body subtree {root_body_name!r} has no group-{visual_geom_group} visual meshes")
     vertices = np.concatenate(chunks)
     return vertices.min(axis=0), vertices.max(axis=0)
+
+
+def visual_scene_option(visual_geom_group: int = 2):
+    import mujoco
+
+    option = mujoco.MjvOption()
+    if not 0 <= visual_geom_group < len(option.geomgroup):
+        raise ValueError(f"visual_geom_group must be in [0, {len(option.geomgroup) - 1}], got {visual_geom_group}")
+    option.geomgroup[:] = 0
+    option.geomgroup[visual_geom_group] = 1
+    return option
 
 
 def add_zed_camera(spec, name: str, width: int, height: int, camera_matrix: np.ndarray):
@@ -95,11 +147,11 @@ def render_frame_center_views(qpos: np.ndarray, source_index: int, output_dir: P
     mujoco.mj_forward(model, data)
 
     if center_name == "full_arm":
-        minimum, maximum = visual_bounds(model, data)
+        minimum, maximum = visual_bounds(model, data, getattr(args, "visual_geom_group", 2))
         distance_floor = 1.25
         distance_scale = args.mesh_distance_scale
     elif center_name == "end_effector":
-        minimum, maximum = subtree_visual_bounds(model, data, "link6")
+        minimum, maximum = subtree_visual_bounds(model, data, "link6", getattr(args, "visual_geom_group", 2))
         distance_floor = 0.60
         distance_scale = args.end_effector_distance_scale
     else:
@@ -118,9 +170,7 @@ def render_frame_center_views(qpos: np.ndarray, source_index: int, output_dir: P
         azimuths = azimuth_min + rng.uniform(0.0, azimuth_step) + np.arange(args.mesh_views) * azimuth_step
     elevations = rng.uniform(elevation_min, elevation_max, size=args.mesh_views)
 
-    scene_option = mujoco.MjvOption()
-    scene_option.geomgroup[:] = 0
-    scene_option.geomgroup[2] = 1
+    scene_option = visual_scene_option(getattr(args, "visual_geom_group", 2))
     renderer = mujoco.Renderer(model, height=args.mesh_height, width=args.mesh_width)
     render_paths = []
     cameras = []
@@ -209,7 +259,13 @@ def render_frame_views(qpos: np.ndarray, source_index: int, output_dir: Path, ar
     return render_paths
 
 
-def select_rendered_mesh_points(points: np.ndarray, camera_path: Path, model, data) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def select_rendered_mesh_points(
+    points: np.ndarray,
+    camera_path: Path,
+    model,
+    data,
+    visual_geom_group: int = 2,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     import mujoco
 
     camera = np.load(camera_path)
@@ -219,9 +275,7 @@ def select_rendered_mesh_points(points: np.ndarray, camera_path: Path, model, da
     model.cam_pos[camera_id] = camera["camera_position"]
     model.cam_quat[camera_id] = camera["camera_quaternion"]
     mujoco.mj_forward(model, data)
-    scene_option = mujoco.MjvOption()
-    scene_option.geomgroup[:] = 0
-    scene_option.geomgroup[2] = 1
+    scene_option = visual_scene_option(visual_geom_group)
     renderer = mujoco.Renderer(model, height=height, width=width)
     renderer.update_scene(data, camera=camera_id, scene_option=scene_option)
 
@@ -473,9 +527,7 @@ def render_mesh_highlights(qpos: np.ndarray, camera_path: Path, scores: np.ndarr
     joint_count = min(qpos.reshape(-1).shape[0], model.nq)
     data.qpos[:joint_count] = qpos.reshape(-1)[:joint_count]
     mujoco.mj_forward(model, data)
-    scene_option = mujoco.MjvOption()
-    scene_option.geomgroup[:] = 0
-    scene_option.geomgroup[2] = 1
+    scene_option = visual_scene_option(getattr(args, "visual_geom_group", 2))
     renderer = mujoco.Renderer(model, height=args.mesh_height, width=args.mesh_width)
     try:
         renderer.update_scene(data, camera=camera_id, scene_option=scene_option)
@@ -588,9 +640,7 @@ def render_pose_overlay(rgb: np.ndarray, qpos: np.ndarray, pose: dict, raw_camer
     joint_count = min(qpos.reshape(-1).shape[0], model.nq)
     data.qpos[:joint_count] = qpos.reshape(-1)[:joint_count]
     mujoco.mj_forward(model, data)
-    scene_option = mujoco.MjvOption()
-    scene_option.geomgroup[:] = 0
-    scene_option.geomgroup[2] = 1
+    scene_option = visual_scene_option(getattr(args, "visual_geom_group", 2))
 
     camera_to_world_rotation = pose["world_to_camera"][:3, :3].T
     camera_position = pose["camera_to_world"][:3, 3]

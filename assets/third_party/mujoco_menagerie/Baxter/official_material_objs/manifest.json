@@ -1,0 +1,441 @@
+{
+  "source_urdf": "assets/third_party/mujoco_menagerie/Baxter/baxter_full.urdf",
+  "output_urdf": "assets/third_party/mujoco_menagerie/Baxter/baxter_full_official_materials.urdf",
+  "converted_dae_count": 15,
+  "obj_count": 31,
+  "meshes": {
+    "baxter_description/meshes/torso/base_link.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/torso/base_link.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/base_link__00_Material_004.obj",
+        "material": "Material_004-material",
+        "rgba": [
+          0.06680743,
+          0.06682219,
+          0.06682219,
+          1.0
+        ],
+        "vertices": 35441,
+        "triangles": 50032
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/torso/base_link.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/base_link__01_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.512,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 3506,
+        "triangles": 5077
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/torso/base_link.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/base_link__02_Material_003.obj",
+        "material": "Material_003-material",
+        "rgba": [
+          0.01630291,
+          0.01630291,
+          0.01630291,
+          1.0
+        ],
+        "vertices": 3362,
+        "triangles": 4600
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/torso/base_link.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/base_link__03_Material_007.obj",
+        "material": "Material_007-material",
+        "rgba": [
+          0.01630291,
+          0.01630291,
+          0.01630291,
+          1.0
+        ],
+        "vertices": 4880,
+        "triangles": 6628
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/torso/base_link.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/base_link__04_Material_005.obj",
+        "material": "Material_005-material",
+        "rgba": [
+          0.64,
+          0.64,
+          0.64,
+          1.0
+        ],
+        "vertices": 2607,
+        "triangles": 2305
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/torso/base_link.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/base_link__05_Material_006.obj",
+        "material": "Material_006-material",
+        "rgba": [
+          0.3512579,
+          0.3512579,
+          0.3512579,
+          1.0
+        ],
+        "vertices": 471,
+        "triangles": 616
+      }
+    ],
+    "baxter_description/meshes/head/H0.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/head/H0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/H0__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.1218559,
+          0.1218559,
+          0.1218559,
+          1.0
+        ],
+        "vertices": 2645,
+        "triangles": 5215
+      }
+    ],
+    "baxter_description/meshes/head/H1.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/head/H1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/H1__00_Material.obj",
+        "material": "Material-material",
+        "rgba": [
+          0.64,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 1928,
+        "triangles": 3484
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/head/H1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/H1__01_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 4,
+        "triangles": 2
+      }
+    ],
+    "baxter_description/meshes/upper_shoulder/S0.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_shoulder/S0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/S0__00_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.09748456,
+          0.09748456,
+          0.09748456,
+          1.0
+        ],
+        "vertices": 20779,
+        "triangles": 38267
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_shoulder/S0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/S0__01_Material_003.obj",
+        "material": "Material_003-material",
+        "rgba": [
+          0.01630304,
+          0.01630304,
+          0.01630304,
+          1.0
+        ],
+        "vertices": 88,
+        "triangles": 82
+      }
+    ],
+    "baxter_description/meshes/lower_shoulder/S1.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/lower_shoulder/S1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/S1__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.64,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 3575,
+        "triangles": 6574
+      }
+    ],
+    "baxter_description/meshes/upper_elbow/E0.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_elbow/E0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/E0__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.512,
+          0.01365332,
+          0.01365332,
+          1.0
+        ],
+        "vertices": 5858,
+        "triangles": 9699
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_elbow/E0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/E0__01_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.01630304,
+          0.01630304,
+          0.01630304,
+          1.0
+        ],
+        "vertices": 1999,
+        "triangles": 3425
+      }
+    ],
+    "baxter_description/meshes/lower_elbow/E1.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/lower_elbow/E1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/E1__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.512,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 4993,
+        "triangles": 8549
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/lower_elbow/E1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/E1__01_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.01630304,
+          0.01630304,
+          0.01630304,
+          1.0
+        ],
+        "vertices": 1898,
+        "triangles": 3455
+      }
+    ],
+    "baxter_description/meshes/upper_forearm/W0.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_forearm/W0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W0__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.512,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 13106,
+        "triangles": 21343
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_forearm/W0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W0__01_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.09748456,
+          0.09748456,
+          0.09748456,
+          1.0
+        ],
+        "vertices": 897,
+        "triangles": 1353
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_forearm/W0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W0__02_Material_003.obj",
+        "material": "Material_003-material",
+        "rgba": [
+          0.01630301,
+          0.01630301,
+          0.01630301,
+          1.0
+        ],
+        "vertices": 1190,
+        "triangles": 1539
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/upper_forearm/W0.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W0__03_Material_005.obj",
+        "material": "Material_005-material",
+        "rgba": [
+          0.512,
+          0.512,
+          0.512,
+          1.0
+        ],
+        "vertices": 2465,
+        "triangles": 2084
+      }
+    ],
+    "baxter_description/meshes/lower_forearm/W1.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/lower_forearm/W1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W1__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.09748472,
+          0.09748472,
+          0.09748472,
+          1.0
+        ],
+        "vertices": 5983,
+        "triangles": 10220
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/lower_forearm/W1.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W1__01_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.01630304,
+          0.01630304,
+          0.01630304,
+          1.0
+        ],
+        "vertices": 1928,
+        "triangles": 3534
+      }
+    ],
+    "baxter_description/meshes/wrist/W2.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/wrist/W2.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W2__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.01630304,
+          0.01630304,
+          0.01630304,
+          1.0
+        ],
+        "vertices": 29486,
+        "triangles": 9842
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/wrist/W2.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W2__01_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.512,
+          0.512,
+          0.512,
+          1.0
+        ],
+        "vertices": 3201,
+        "triangles": 1067
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/wrist/W2.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/W2__02_Material_003.obj",
+        "material": "Material_003-material",
+        "rgba": [
+          0.1707223,
+          0.1707223,
+          0.1707223,
+          1.0
+        ],
+        "vertices": 1263,
+        "triangles": 421
+      }
+    ],
+    "baxter_description/meshes/base/PEDESTAL.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/baxter_description/meshes/base/PEDESTAL.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/PEDESTAL__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.01304,
+          0.01304,
+          0.01304,
+          1.0
+        ],
+        "vertices": 208371,
+        "triangles": 74707
+      }
+    ],
+    "rethink_ee_description/meshes/electric_gripper/electric_gripper_base.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/rethink_ee_description/meshes/electric_gripper/electric_gripper_base.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/electric_gripper_base__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.64,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 36024,
+        "triangles": 12404
+      },
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/rethink_ee_description/meshes/electric_gripper/electric_gripper_base.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/electric_gripper_base__01_Material_002.obj",
+        "material": "Material_002-material",
+        "rgba": [
+          0.64,
+          0.64,
+          0.64,
+          1.0
+        ],
+        "vertices": 4148,
+        "triangles": 1754
+      }
+    ],
+    "rethink_ee_description/meshes/electric_gripper/fingers/extended_narrow.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/rethink_ee_description/meshes/electric_gripper/fingers/extended_narrow.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/extended_narrow__00_Material_001_001.obj",
+        "material": "Material_001_001-material",
+        "rgba": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 8683,
+        "triangles": 2934
+      }
+    ],
+    "rethink_ee_description/meshes/electric_gripper/fingers/paddle_tip.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/rethink_ee_description/meshes/electric_gripper/fingers/paddle_tip.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/paddle_tip__00_Material_001.obj",
+        "material": "Material_001-material",
+        "rgba": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 4269,
+        "triangles": 1428
+      }
+    ],
+    "rethink_ee_description/meshes/electric_gripper/fingers/half_round_tip.DAE": [
+      {
+        "source": "assets/third_party/mujoco_menagerie/Baxter/rethink_ee_description/meshes/electric_gripper/fingers/half_round_tip.DAE",
+        "obj": "assets/third_party/mujoco_menagerie/Baxter/official_material_objs/half_round_tip__00_Material_001_001.obj",
+        "material": "Material_001_001-material",
+        "rgba": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "vertices": 8755,
+        "triangles": 2963
+      }
+    ]
+  }
+}

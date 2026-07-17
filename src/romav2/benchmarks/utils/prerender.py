@@ -21,7 +21,7 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from .geometry import add_zed_camera, visual_bounds  # noqa: E402
+from .geometry import add_zed_camera, restrict_visual_geoms_to_bodies, visual_bounds, visual_scene_option  # noqa: E402
 from .pose import load_camera_matrix  # noqa: E402
 from .render import apply_json_qpos, load_joint_positions  # noqa: E402
 
@@ -72,6 +72,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-dir", type=Path, default=DEFAULT_DATASET_DIR)
     parser.add_argument("--mujoco-xml", type=Path, default=DEFAULT_MJCF)
+    parser.add_argument("--visual-geom-group", type=int, default=2, help="MuJoCo geom group containing renderable visual meshes.")
+    parser.add_argument(
+        "--visual-body-names",
+        nargs="*",
+        default=None,
+        help="Optional exact body-name allowlist for rendering, bounds, and mesh picking.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--views", "-x", type=int, default=6)
     parser.add_argument("--width", type=int, default=640)
@@ -80,6 +87,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-distance", type=float, default=1.2)
     parser.add_argument("--elevation", type=float, default=-20.0)
     parser.add_argument("--azimuth-offset", type=float, default=0.0)
+    parser.add_argument(
+        "--azimuths",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Optional explicit azimuths in degrees. The count must equal --views.",
+    )
     parser.add_argument("--camera-settings", type=Path, default=None)
     parser.add_argument("--fx", type=float, default=None)
     parser.add_argument("--fy", type=float, default=None)
@@ -141,6 +155,7 @@ def compile_model(args: argparse.Namespace, camera_matrix: np.ndarray):
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, args.height)
     add_zed_camera(spec, "zed_render_camera", args.width, args.height, camera_matrix)
     model = spec.compile()
+    restrict_visual_geoms_to_bodies(model, args.visual_body_names, args.visual_geom_group)
     data = mujoco.MjData(model)
     return model, data
 
@@ -183,14 +198,18 @@ def render_frame(args: argparse.Namespace, model, data, renderer, scene_option, 
     applied = apply_json_qpos(model, data, load_joint_positions(json_path))
     mujoco.mj_forward(model, data)
 
-    minimum, maximum = visual_bounds(model, data)
+    minimum, maximum = visual_bounds(model, data, args.visual_geom_group)
     center = 0.5 * (minimum + maximum)
     radius = 0.5 * np.linalg.norm(maximum - minimum)
     distance = max(args.min_distance, args.distance_scale * radius)
 
     views = []
-    for view_index in range(args.views):
-        azimuth = args.azimuth_offset + view_index * 360.0 / args.views
+    azimuths = (
+        args.azimuths
+        if args.azimuths is not None
+        else [args.azimuth_offset + view_index * 360.0 / args.views for view_index in range(args.views)]
+    )
+    for view_index, azimuth in enumerate(azimuths):
         camera_position, camera_quaternion = compute_orbit_camera(
             model,
             data,
@@ -256,6 +275,8 @@ def process(args: argparse.Namespace) -> Path:
     input_dataset_dir = args.dataset_dir
     if args.views < 1:
         raise ValueError("--views must be >= 1")
+    if args.azimuths is not None and len(args.azimuths) != args.views:
+        raise ValueError(f"--azimuths supplied {len(args.azimuths)} angles, but --views={args.views}")
     if args.stride < 1:
         raise ValueError("--stride must be >= 1")
     if args.num_shards < 1:
@@ -292,9 +313,7 @@ def process(args: argparse.Namespace) -> Path:
     if camera_id < 0:
         raise RuntimeError("zed_render_camera was not added to the MuJoCo model")
 
-    scene_option = mujoco.MjvOption()
-    scene_option.geomgroup[:] = 0
-    scene_option.geomgroup[2] = 1
+    scene_option = visual_scene_option(args.visual_geom_group)
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
     records = []
     try:
@@ -308,9 +327,19 @@ def process(args: argparse.Namespace) -> Path:
         "dataset_dir_input": str(input_dataset_dir),
         "dataset_dir": str(args.dataset_dir),
         "mujoco_xml": str(args.mujoco_xml),
+        "visual_geom_group": args.visual_geom_group,
+        "visual_body_names": args.visual_body_names,
         "output_dir": str(args.output_dir),
         "frame_count": len(records),
         "views": args.views,
+        "azimuths_degrees": (
+            [float(azimuth % 360.0) for azimuth in args.azimuths]
+            if args.azimuths is not None
+            else [
+                float((args.azimuth_offset + view_index * 360.0 / args.views) % 360.0)
+                for view_index in range(args.views)
+            ]
+        ),
         "image_width": args.width,
         "image_height": args.height,
         "camera_matrix": camera_matrix.tolist(),

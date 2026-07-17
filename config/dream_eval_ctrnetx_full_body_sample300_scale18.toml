@@ -1,0 +1,54 @@
+[robot]
+visual_geom_group = 2
+
+[paths]
+data_root = "data/ctrnet-x"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/ctrnetx_full_body_sample300_scale18_prerendered_views"
+output_root = "outputs/ctrnetx_full_body_sample300_scale18_match_eval"
+
+[download]
+sam3_model_id = "facebook/sam3"
+sam3_revision = "master"
+
+[datasets.real]
+enabled = false
+name = "panda-3cam_azure"
+path = "real/panda-3cam_azure"
+google_drive_id = "10Tpx8jAfzP6g44WXfvjlVywbIlxZ4BRx"
+
+[datasets.dr]
+enabled = true
+name = "panda_dataset_full_body_10eps"
+path = "panda_dataset_full_body_10eps"
+google_drive_id = "1tOzfzlRhUbRO-QkzPHvj-IOPFuSIts-R"
+
+[datasets.photo]
+enabled = true
+name = "panda_synth_test_photo"
+path = "synthetic/panda_synth_test_photo"
+google_drive_id = "11pK1BqfQkzVnTjyQHVRZ6ZkX4oyxbEQP"
+
+[evaluation]
+datasets = ["dr"]
+sample_count = 300
+sample_seed = 90
+views = 6
+match_batch_size = 6
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = false
+save_visualizations = true
+save_all_matches = true
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 1.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0

@@ -41,9 +41,11 @@ from .geometry import (  # noqa: E402
     add_zed_camera,
     draw_matches,
     imcui_keypoint_ransac_mask,
+    restrict_visual_geoms_to_bodies,
     select_rendered_mesh_points,
     solve_camera_pose,
     visual_bounds,
+    visual_scene_option,
 )
 from .render import apply_json_qpos, load_joint_positions  # noqa: E402
 
@@ -61,6 +63,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image", type=Path, default=DEFAULT_FRAME_IMAGE)
     parser.add_argument("--json", type=Path, default=DEFAULT_FRAME_JSON)
     parser.add_argument("--mujoco-xml", type=Path, default=DEFAULT_MJCF)
+    parser.add_argument("--visual-geom-group", type=int, default=2, help="MuJoCo geom group containing renderable visual meshes.")
+    parser.add_argument(
+        "--visual-body-names",
+        nargs="*",
+        default=None,
+        help="Optional exact body-name allowlist for rendering, bounds, and mesh picking.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--views", "-x", type=int, default=6)
     parser.add_argument("--width", type=int, default=None, help="Render width. Defaults to input image width.")
@@ -190,11 +199,74 @@ def keypoint_name_to_body(name: str) -> str:
     return name
 
 
+CTRNET_BAXTER_LEFT_JOINTS = (
+    "left_s0",
+    "left_s1",
+    "left_e0",
+    "left_e1",
+    "left_w0",
+    "left_w1",
+    "left_w2",
+)
+
+
+def _ctrnet_baxter_dh_transform(alpha: float, a: float, d: float, theta: float) -> np.ndarray:
+    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
+    cos_alpha, sin_alpha = np.cos(alpha), np.sin(alpha)
+    return np.array(
+        [
+            [cos_theta, -sin_theta, 0.0, a],
+            [sin_theta * cos_alpha, cos_theta * cos_alpha, -sin_alpha, -d * sin_alpha],
+            [sin_theta * sin_alpha, cos_theta * sin_alpha, cos_alpha, d * cos_alpha],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def ctrnet_baxter_ee_point(model, data) -> np.ndarray:
+    """Return the official CtRNet Baxter evaluation endpoint in MuJoCo base coordinates."""
+    import mujoco
+
+    joint_positions = []
+    for joint_name in CTRNET_BAXTER_LEFT_JOINTS:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id < 0:
+            raise ValueError(f"CtRNet Baxter joint {joint_name!r} was not found")
+        joint_positions.append(float(data.qpos[int(model.jnt_qposadr[joint_id])]))
+    theta = np.asarray(joint_positions, dtype=np.float64)
+
+    transform = np.eye(4, dtype=np.float64)
+    transform[2, 3] = 0.27035
+    transforms = (
+        _ctrnet_baxter_dh_transform(0.0, 0.0, 0.0, theta[0]),
+        _ctrnet_baxter_dh_transform(-np.pi / 2.0, 0.069, 0.0, theta[1] + np.pi / 2.0),
+        _ctrnet_baxter_dh_transform(np.pi / 2.0, 0.0, 0.36435, theta[2]),
+        _ctrnet_baxter_dh_transform(-np.pi / 2.0, 0.069, 0.0, theta[3]),
+        _ctrnet_baxter_dh_transform(np.pi / 2.0, 0.0, 0.37429, theta[4]),
+        _ctrnet_baxter_dh_transform(-np.pi / 2.0, 0.010, 0.0, theta[5]),
+        _ctrnet_baxter_dh_transform(np.pi / 2.0, 0.0, 0.0, theta[6]),
+    )
+    for joint_transform in transforms:
+        transform = transform @ joint_transform
+    endpoint_in_arm_base = (transform @ np.array([0.0, 0.0, 0.3683, 1.0]))[:3]
+
+    mount_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "left_arm_mount")
+    if mount_id < 0:
+        raise ValueError("CtRNet Baxter reference body 'left_arm_mount' was not found")
+    mount_rotation = np.asarray(data.xmat[mount_id], dtype=np.float64).reshape(3, 3)
+    mount_translation = np.asarray(data.xpos[mount_id], dtype=np.float64)
+    return mount_rotation @ endpoint_in_arm_base + mount_translation
+
+
 def fk_keypoints(model, data, keypoints: list[dict]) -> dict[str, np.ndarray]:
     import mujoco
 
     result = {}
     for keypoint in keypoints:
+        if keypoint["name"] == "ctrnet_baxter_ee":
+            result[keypoint["name"]] = ctrnet_baxter_ee_point(model, data)
+            continue
         body_name = keypoint_name_to_body(keypoint["name"])
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         if body_id < 0:
@@ -282,7 +354,15 @@ def draw_keypoint_eval(image: np.ndarray, metrics: dict) -> np.ndarray:
     return canvas
 
 
-def make_model_and_data(mjcf: Path, width: int, height: int, camera_matrix: np.ndarray, payload: dict):
+def make_model_and_data(
+    mjcf: Path,
+    width: int,
+    height: int,
+    camera_matrix: np.ndarray,
+    payload: dict,
+    visual_body_names: list[str] | tuple[str, ...] | None = None,
+    visual_geom_group: int = 2,
+):
     import mujoco
 
     spec = mujoco.MjSpec.from_file(str(mjcf))
@@ -290,6 +370,7 @@ def make_model_and_data(mjcf: Path, width: int, height: int, camera_matrix: np.n
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, height)
     add_zed_camera(spec, "zed_render_camera", width, height, camera_matrix)
     model = spec.compile()
+    restrict_visual_geoms_to_bodies(model, visual_body_names, visual_geom_group)
     data = mujoco.MjData(model)
     mujoco.mj_resetData(model, data)
     data.qvel[:] = 0.0
@@ -305,14 +386,12 @@ def load_joint_positions_from_payload(payload: dict) -> dict[str, float]:
 def render_orbit_views(model, data, args: argparse.Namespace, camera_matrix: np.ndarray, output_dir: Path) -> list[Path]:
     import mujoco
 
-    minimum, maximum = visual_bounds(model, data)
+    minimum, maximum = visual_bounds(model, data, args.visual_geom_group)
     center = 0.5 * (minimum + maximum)
     radius = 0.5 * np.linalg.norm(maximum - minimum)
     distance = max(args.min_distance, args.distance_scale * radius)
 
-    scene_option = mujoco.MjvOption()
-    scene_option.geomgroup[:] = 0
-    scene_option.geomgroup[2] = 1
+    scene_option = visual_scene_option(args.visual_geom_group)
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "zed_render_camera")
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
@@ -404,7 +483,9 @@ def match_one_render(
     selected = geometric & (scores >= args.score_filter)
     selected_indices = np.flatnonzero(selected)
     camera_path = render_path.with_name(f"{render_path.stem}_camera.npz")
-    world_points, valid_surface, geom_ids, body_ids = select_rendered_mesh_points(points1[selected], camera_path, model, data)
+    world_points, valid_surface, geom_ids, body_ids = select_rendered_mesh_points(
+        points1[selected], camera_path, model, data, args.visual_geom_group
+    )
     mesh_hit_indices = selected_indices[valid_surface]
     image_points = points0[mesh_hit_indices]
     mesh_points = world_points[valid_surface]
@@ -554,7 +635,15 @@ def process(args: argparse.Namespace) -> Path:
     if input_mask is not None:
         Image.fromarray(input_mask.astype(np.uint8) * 255).save(run_dir / "input_mask.png")
 
-    model, data = make_model_and_data(args.mujoco_xml, args.width, args.height, camera_matrix, payload)
+    model, data = make_model_and_data(
+        args.mujoco_xml,
+        args.width,
+        args.height,
+        camera_matrix,
+        payload,
+        args.visual_body_names,
+        args.visual_geom_group,
+    )
     fk_points = fk_keypoints(model, data, dream_keypoints(payload))
     render_paths = render_orbit_views(model, data, args, camera_matrix, render_dir)
     matcher_api = ImcuiMatcher(args)

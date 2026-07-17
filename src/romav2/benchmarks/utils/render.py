@@ -25,7 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Render multiple MuJoCo views around a Franka Panda pose loaded from a DREAM-style JSON file."
     )
-    parser.add_argument("--mjcf", type=Path, default=DEFAULT_MJCF, help="Path to the Panda MJCF XML.")
+    parser.add_argument("--mjcf", type=Path, default=DEFAULT_MJCF, help="Path to a MuJoCo MJCF or importable URDF.")
+    parser.add_argument("--visual-geom-group", type=int, default=2, help="MuJoCo geom group containing renderable visual meshes.")
     parser.add_argument(
         "--qpos-json",
         type=Path,
@@ -89,14 +90,14 @@ def apply_json_qpos(model, data, json_positions: dict[str, float]) -> dict[str, 
     return applied
 
 
-def visual_bounds(model, data) -> tuple[np.ndarray, np.ndarray]:
+def visual_bounds(model, data, visual_geom_group: int = 2) -> tuple[np.ndarray, np.ndarray]:
     import mujoco
 
     points = []
     for geom_id in range(model.ngeom):
         if model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH:
             continue
-        if model.geom_group[geom_id] != 2:
+        if model.geom_group[geom_id] != visual_geom_group:
             continue
         points.append(np.asarray(data.geom_xpos[geom_id], dtype=np.float64))
 
@@ -134,7 +135,7 @@ def render_views(args: argparse.Namespace) -> list[Path]:
     applied_joints = apply_json_qpos(model, data, load_joint_positions(args.qpos_json))
     mujoco.mj_forward(model, data)
 
-    minimum, maximum = visual_bounds(model, data)
+    minimum, maximum = visual_bounds(model, data, args.visual_geom_group)
     center = 0.5 * (minimum + maximum)
     radius = 0.5 * np.linalg.norm(maximum - minimum)
     distance = max(args.min_distance, args.distance_scale * radius)
@@ -142,7 +143,9 @@ def render_views(args: argparse.Namespace) -> list[Path]:
     scene_option = mujoco.MjvOption()
     if args.hide_collision:
         scene_option.geomgroup[:] = 0
-        scene_option.geomgroup[2] = 1
+        if not 0 <= args.visual_geom_group < len(scene_option.geomgroup):
+            raise ValueError(f"--visual-geom-group must be in [0, {len(scene_option.geomgroup) - 1}]")
+        scene_option.geomgroup[args.visual_geom_group] = 1
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)

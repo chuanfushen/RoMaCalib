@@ -1,3 +1,6 @@
+[robot]
+visual_geom_group = 2
+
 [paths]
 data_root = "data/dream"
 sam3_dir = "assets/checkpoints/sam3"
@@ -42,7 +45,7 @@ save_visualizations = true
 save_all_matches = true
 
 [prerender]
-workers = 36
+workers = 4
 width = 640
 height = 480
 distance_scale = 2.8

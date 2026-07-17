@@ -1,0 +1,42 @@
+# Baxter 300-frame evaluation matching the standard DREAM/Franka sampling
+# and matching settings. Paths are isolated from all smoke-test outputs.
+
+[robot]
+visual_geom_group = 1
+
+[paths]
+data_root = "data"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/Baxter/baxter_full.urdf"
+prerender_root = "outputs/dream_baxter_sample300_prerendered_views"
+output_root = "outputs/dream_baxter_sample300_match_eval"
+
+[datasets.dr]
+enabled = true
+name = "baxter_synth_test_dr"
+path = "baxter_synth_test_dr"
+
+[evaluation]
+datasets = ["dr"]
+sample_count = 300
+sample_seed = 90
+views = 6
+match_batch_size = 6
+device = "cuda"
+mask_input = true
+mask_prompt = "dual-arm robot"
+resume = false
+save_visualizations = true
+save_all_matches = true
+
+[prerender]
+# One worker keeps the aggregate manifest deterministic. This changes only
+# rendering throughput; frame selection and rendered views are unchanged.
+workers = 1
+width = 640
+height = 480
+distance_scale = 1.65
+min_distance = 1.0
+elevation = -20.0
+azimuth_offset = 0.0

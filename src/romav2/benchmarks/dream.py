@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 class Dream:
-    """DREAM Panda pose benchmark backed by batched render matching and PnP."""
+    """DREAM robot pose benchmark backed by batched render matching and PnP."""
 
     def __init__(
         self,
@@ -18,6 +18,7 @@ class Dream:
         sample_seed: int = 90,
         views: int = 6,
         match_batch_size: int = 6,
+        visual_geom_group: int = 2,
         device: str = "cuda",
         mask_input: bool = True,
         mask_prompt: str = "robotic arm",
@@ -34,6 +35,7 @@ class Dream:
         self.sample_seed = sample_seed
         self.views = views
         self.match_batch_size = match_batch_size
+        self.visual_geom_group = visual_geom_group
         self.device = device
         self.mask_input = mask_input
         self.mask_prompt = mask_prompt
@@ -49,6 +51,7 @@ class Dream:
             "--dataset-dir", str(self.data_root),
             "--prerender-dir", str(self.prerender_root),
             "--mujoco-xml", str(self.mujoco_xml),
+            "--visual-geom-group", str(self.visual_geom_group),
             "--output-dir", str(self.output_dir),
             "--sample-seed", str(self.sample_seed),
             "--views", str(self.views),

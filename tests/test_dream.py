@@ -33,6 +33,7 @@ def benchmark_dataset(dataset_key: str) -> dict:
         sample_seed=evaluation["sample_seed"],
         views=evaluation["views"],
         match_batch_size=evaluation["match_batch_size"],
+        visual_geom_group=int(config.get("robot", {}).get("visual_geom_group", 2)),
         device=evaluation["device"],
         mask_input=evaluation["mask_input"],
         mask_prompt=evaluation["mask_prompt"],

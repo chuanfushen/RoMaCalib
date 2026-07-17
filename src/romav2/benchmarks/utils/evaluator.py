@@ -91,6 +91,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-dir", type=Path, default=DEFAULT_DATASET_DIR)
     parser.add_argument("--mujoco-xml", type=Path, default=DEFAULT_MJCF)
+    parser.add_argument("--visual-geom-group", type=int, default=2, help="MuJoCo geom group containing renderable visual meshes.")
+    parser.add_argument(
+        "--visual-body-names",
+        nargs="*",
+        default=None,
+        help="Optional exact body-name allowlist for rendering, bounds, and mesh picking.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--prerender-dir", type=Path, default=None, help="Use pre-rendered views from prerender_dream_mujoco_views.py.")
     parser.add_argument("--views", "-x", type=int, default=6)
@@ -324,7 +331,15 @@ def process_frame(
     camera_matrix = load_camera_matrix(frame_args, observed_for_match.shape)
 
     try:
-        model, data = make_model_and_data(args.mujoco_xml, frame_args.width, frame_args.height, camera_matrix, payload)
+        model, data = make_model_and_data(
+            args.mujoco_xml,
+            frame_args.width,
+            frame_args.height,
+            camera_matrix,
+            payload,
+            args.visual_body_names,
+            args.visual_geom_group,
+        )
         fk_points = fk_keypoints(model, data, dream_keypoints(payload))
         if args.prerender_dir is not None:
             prerender_frame_dir = args.prerender_dir / f"{index:06d}"
@@ -415,6 +430,18 @@ def auc_under_threshold(values: np.ndarray, threshold: float, delta: float) -> f
     return float(np.trapz(counts, dx=delta) / threshold)
 
 
+def discrete_accuracy_auc(
+    values: np.ndarray,
+    thresholds: np.ndarray,
+    denominator: int | None = None,
+) -> float:
+    """Match the threshold-loop AUC used by the official CtRNet Baxter notebook."""
+    denominator = len(values) if denominator is None else int(denominator)
+    if denominator < 1:
+        return float("nan")
+    return float(np.mean([(values < threshold).sum() / denominator for threshold in thresholds]))
+
+
 def summarize(records: list[dict], auc_threshold: float, auc_delta: float) -> dict:
     successes = [record for record in records if record.get("status") == "success"]
     failures = [record for record in records if record.get("status") != "success"]
@@ -445,6 +472,25 @@ def summarize(records: list[dict], auc_threshold: float, auc_delta: float) -> di
         "pixel_error/median": float(np.median(pixel_values)) if len(pixel_values) else float("nan"),
         "pnp_inliers/mean": float(inlier_values.mean()) if len(inlier_values) else float("nan"),
         "pnp_reprojection_error/mean": float(reproj_values.mean()) if len(reproj_values) else float("nan"),
+        "Baxter/evaluation_denominator": len(records),
+        "Baxter/PCK@50px": (
+            float((pixel_values < 50.0).sum() / len(records) * 100.0) if records else float("nan")
+        ),
+        "Baxter/PCK_AUC@200px": discrete_accuracy_auc(
+            pixel_values, np.arange(200, dtype=np.float64), denominator=len(records)
+        ),
+        "Baxter/ADD@100mm": (
+            float((add_values < 0.1).sum() / len(records) * 100.0) if records else float("nan")
+        ),
+        "Baxter/ADD_AUC@400mm": discrete_accuracy_auc(
+            add_values * 1000.0, np.arange(400, dtype=np.float64), denominator=len(records)
+        ),
+        "Baxter/Mean_2D_error_success_only_px": (
+            float(pixel_values.mean()) if len(pixel_values) else float("nan")
+        ),
+        "Baxter/Mean_3D_error_success_only_mm": (
+            float(add_values.mean() * 1000.0) if len(add_values) else float("nan")
+        ),
     }
     for threshold_mm in (10, 20, 40, 60):
         summary[f"ADD<{threshold_mm}mm"] = (
@@ -493,6 +539,8 @@ def process(args: argparse.Namespace, matcher_api: ImcuiMatcher | None = None) -
         "dataset_dir_input": str(input_dataset_dir),
         "dataset_dir": str(args.dataset_dir),
         "mujoco_xml": str(args.mujoco_xml),
+        "visual_geom_group": args.visual_geom_group,
+        "visual_body_names": args.visual_body_names,
         "matcher": args.matcher,
         "views": args.views,
         "input_mask": {
@@ -507,6 +555,13 @@ def process(args: argparse.Namespace, matcher_api: ImcuiMatcher | None = None) -
             "ADD/mean": "Mean of per-frame mean 3D FK keypoint error in camera coordinates.",
             "ADD/AUC": "RoboPose-style area under accuracy-threshold curve over per-frame ADD values.",
             "pixel_error/mean": "Mean of per-frame mean 2D FK keypoint reprojection error.",
+            "Baxter/evaluation_denominator": "All requested frames; failed PnP frames count as misses at every official threshold.",
+            "Baxter/PCK@50px": "Official CtRNet endpoint accuracy below 50 pixels, using all requested frames as denominator.",
+            "Baxter/PCK_AUC@200px": "Official CtRNet discrete PCK AUC over integer thresholds 0..199 pixels; failed PnP frames are misses.",
+            "Baxter/ADD@100mm": "Official CtRNet endpoint 3D accuracy below 100 mm, using all requested frames as denominator.",
+            "Baxter/ADD_AUC@400mm": "Official CtRNet discrete endpoint ADD AUC over integer thresholds 0..399 mm; failed PnP frames are misses.",
+            "Baxter/Mean_2D_error_success_only_px": "Mean endpoint reprojection error over frames with a valid PnP pose; not directly comparable to the official 100-frame mean when failures exist.",
+            "Baxter/Mean_3D_error_success_only_mm": "Mean endpoint 3D error over frames with a valid PnP pose; not directly comparable to the official 100-frame mean when failures exist.",
         },
     }
     (args.output_dir / "summary.json").write_text(json.dumps(output, indent=2) + "\n")
