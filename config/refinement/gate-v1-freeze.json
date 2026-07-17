@@ -8,7 +8,7 @@
   "evidence_schema_version": "1.0.0",
   "trajectory_protocol_version": "1.0.0",
   "evaluation_spec_path": "config/refinement/evaluation-v1-spec.json",
-  "evaluation_spec_sha256": "d351f3bcdb17be70ac40205e1bfbeef384c96970f8a676893ab6436b5c03a7d34",
+  "evaluation_spec_sha256": "d351f3bcdb17be70ac40205e1bfbef384c96970f8a676893ab6436b5c03a7d34",
   "evaluation_spec_schema_version": "1.0.0",
   "threshold_source": "analytic_preregistration",
   "development_manifest": "none",
