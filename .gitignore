@@ -6,3 +6,4 @@ wandb/
 outputs/
 assets/checkpoints/
 config/dream_eval.local.toml
+AGENTS.md
