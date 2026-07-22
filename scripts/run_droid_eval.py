@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument(
         "--stage",
-        choices=("audit", "masks", "raw-eval", "roma", "select-roma", "caliball"),
+        choices=("audit", "masks", "raw-eval", "roma", "select-roma", "caliball", "pose-eval"),
         required=True,
     )
     parser.add_argument("--scope", choices=("tuning", "full"), default="tuning")
@@ -523,15 +523,37 @@ def stage_roma(
                 )
                 if len(record["scores"]):
                     correspondences.append(record)
-            pose, pnp = solve_shared_pose(
-                correspondences,
-                session.camera_matrix,
-                topk_per_frame=int(config["matching"]["topk_per_frame"]),
-                reprojection_error_px=float(config["matching"]["pnp_threshold_px"]),
-                iterations=int(config["matching"]["pnp_iterations"]),
-                confidence=float(config["matching"]["pnp_confidence"]),
-                seed=int(config["matching"]["seed"]) + session_ordinal * 1009 + iteration,
-            )
+            try:
+                pose, pnp = solve_shared_pose(
+                    correspondences,
+                    session.camera_matrix,
+                    topk_per_frame=int(config["matching"]["topk_per_frame"]),
+                    reprojection_error_px=float(config["matching"]["pnp_threshold_px"]),
+                    iterations=int(config["matching"]["pnp_iterations"]),
+                    confidence=float(config["matching"]["pnp_confidence"]),
+                    seed=int(config["matching"]["seed"]) + session_ordinal * 1009 + iteration,
+                )
+                status = "success"
+                failure_reason = None
+            except RuntimeError as error:
+                failure_reason = f"{type(error).__name__}: {error}"
+                if current_pose is not None:
+                    pose = current_pose
+                    status = "fallback_parent"
+                else:
+                    world_to_camera = np.asarray(session.raw_world_to_camera, dtype=np.float64)
+                    pose = {
+                        "world_to_camera": world_to_camera,
+                        "camera_to_world": np.linalg.inv(world_to_camera),
+                        "camera_matrix": session.camera_matrix,
+                    }
+                    status = "fallback_raw_calibration"
+                pnp = {
+                    "success": False,
+                    "failure_reason": failure_reason,
+                    "source_frame_count": len(correspondences),
+                    "fallback": status,
+                }
             score = validation_score(
                 config,
                 session,
@@ -553,6 +575,9 @@ def stage_roma(
             {
                 "session_id": session.session_id,
                 "iteration": iteration,
+                "status": status,
+                "fallback_used": status != "success",
+                "failure_reason": failure_reason,
                 "fit_frame_indices": list(indices),
                 "pnp": pnp,
                 "validation": score,
@@ -944,6 +969,9 @@ def stage_raw_eval(
                 metrics = binary_mask_metrics(rendered, target)
                 record = {
                     "session_id": session.session_id,
+                    "episode_rank": session.episode.rank,
+                    "episode_uuid": session.episode.uuid,
+                    "camera_name": session.camera_name,
                     "frame_index": index,
                     "split": split_name,
                     "status": "success",
@@ -954,9 +982,197 @@ def stage_raw_eval(
                 }
                 write_json(destination / "raw_eval.json", record)
                 all_records.append(record)
+    session_rows = []
+    for session_id in sorted({row["session_id"] for row in all_records}):
+        rows = [row for row in all_records if row["session_id"] == session_id]
+        session_rows.append(
+            {
+                "session_id": session_id,
+                "episode_rank": rows[0]["episode_rank"],
+                "episode_uuid": rows[0]["episode_uuid"],
+                "camera_name": rows[0]["camera_name"],
+                "requested_frames": len(rows),
+                "successful_frames": len(rows),
+                "iou_macro": float(np.mean([row["metrics"]["iou"] for row in rows])),
+            }
+        )
+    episode_rows = []
+    for episode_uuid in sorted({row["episode_uuid"] for row in session_rows}):
+        cameras = [row for row in session_rows if row["episode_uuid"] == episode_uuid]
+        episode_rows.append(
+            {
+                "episode_uuid": episode_uuid,
+                "episode_rank": cameras[0]["episode_rank"],
+                "camera_count": len(cameras),
+                "iou_macro": float(np.mean([row["iou_macro"] for row in cameras])),
+            }
+        )
     write_json(
         output_root / f"raw_eval_{split_name}.json",
-        {"split": split_name, "record_count": len(all_records), "records": all_records},
+        {
+            "git": git_record(),
+            "split": split_name,
+            "record_count": len(all_records),
+            "frame_iou_macro": float(np.mean([row["metrics"]["iou"] for row in all_records])),
+            "session_iou_macro": float(np.mean([row["iou_macro"] for row in session_rows])),
+            "episode_iou_macro": float(np.mean([row["iou_macro"] for row in episode_rows])),
+            "sessions": session_rows,
+            "episodes": episode_rows,
+            "records": all_records,
+        },
+    )
+
+
+def stage_pose_eval(
+    config: dict,
+    sessions: list[DroidSession],
+    output_root: Path,
+    mask_root: Path,
+    split_name: str,
+    iteration: int,
+    max_frames: int | None,
+) -> None:
+    args = SimpleNamespace(
+        width=int(config["render"]["width"]),
+        height=int(config["render"]["height"]),
+        visual_geom_group=int(config["render"]["visual_geom_group"]),
+    )
+    records = []
+    session_rows = []
+    for session in sessions:
+        indices = frame_indices(config, session, split_name)
+        if max_frames is not None:
+            indices = indices[:max_frames]
+        pose_path = (
+            output_root
+            / "sessions"
+            / session.session_id
+            / "poses"
+            / f"iteration_{iteration:02d}"
+            / "selected_pose.npz"
+        )
+        pose = load_pose(pose_path)
+        model, data = make_droid_model(config, session)
+        session_records = []
+        with h5py.File(session.episode.trajectory_h5, "r") as handle:
+            joints = np.asarray(handle["observation/robot_state/joint_positions"])
+            gripper = np.asarray(handle["observation/robot_state/gripper_position"])
+            for index in indices:
+                mask_frame = frame_dir(mask_root, session, index)
+                target_path = mask_frame / "sam3_mask.png"
+                real_path = mask_frame / "real.png"
+                destination = (
+                    output_root
+                    / "sessions"
+                    / session.session_id
+                    / "evaluation"
+                    / split_name
+                    / f"{index:06d}"
+                )
+                try:
+                    target = np.asarray(Image.open(target_path).convert("L")) > 0
+                    real = np.asarray(Image.open(real_path).convert("RGB"))
+                    set_droid_state(model, data, joints[index], gripper[index])
+                    render_rgb_path, render_mask_path, camera_path, rendered = render_pose_aligned_artifacts(
+                        model,
+                        data,
+                        args,
+                        session.camera_matrix,
+                        pose["world_to_camera"],
+                        destination,
+                        stem="selected_pose",
+                    )
+                    simulation = np.asarray(Image.open(render_rgb_path).convert("RGB"))
+                    overlay = real.copy()
+                    overlay[rendered] = np.rint(
+                        0.45 * real[rendered].astype(np.float32)
+                        + 0.55 * simulation[rendered].astype(np.float32)
+                    ).astype(np.uint8)
+                    destination.mkdir(parents=True, exist_ok=True)
+                    overlay_path = destination / "sim_real_overlay.png"
+                    Image.fromarray(overlay).save(overlay_path)
+                    diagnostic = real.copy()
+                    true_positive = rendered & target
+                    false_positive = rendered & ~target
+                    false_negative = ~rendered & target
+                    diagnostic[true_positive] = [40, 180, 80]
+                    diagnostic[false_positive] = [220, 60, 50]
+                    diagnostic[false_negative] = [60, 120, 230]
+                    diagnostic_path = destination / "iou_diagnostic.png"
+                    Image.fromarray(diagnostic).save(diagnostic_path)
+                    metrics = binary_mask_metrics(rendered, target)
+                    record = {
+                        "session_id": session.session_id,
+                        "episode_rank": session.episode.rank,
+                        "episode_uuid": session.episode.uuid,
+                        "camera_name": session.camera_name,
+                        "frame_index": index,
+                        "split": split_name,
+                        "status": "success",
+                        "metrics": metrics,
+                        "render_rgb": str(render_rgb_path),
+                        "render_mask": str(render_mask_path),
+                        "camera_npz": str(camera_path),
+                        "sim_real_overlay": str(overlay_path),
+                        "iou_diagnostic": str(diagnostic_path),
+                    }
+                except Exception as error:
+                    record = {
+                        "session_id": session.session_id,
+                        "episode_rank": session.episode.rank,
+                        "episode_uuid": session.episode.uuid,
+                        "camera_name": session.camera_name,
+                        "frame_index": index,
+                        "split": split_name,
+                        "status": "failure",
+                        "failure_reason": f"{type(error).__name__}: {error}",
+                        "metrics": {"iou": 0.0},
+                    }
+                write_json(destination / "frame_summary.json", record)
+                records.append(record)
+                session_records.append(record)
+        session_iou = float(np.mean([row["metrics"]["iou"] for row in session_records]))
+        session_row = {
+            "session_id": session.session_id,
+            "episode_rank": session.episode.rank,
+            "episode_uuid": session.episode.uuid,
+            "camera_name": session.camera_name,
+            "requested_frames": len(session_records),
+            "successful_frames": sum(row["status"] == "success" for row in session_records),
+            "iou_macro": session_iou,
+        }
+        write_json(
+            output_root / "sessions" / session.session_id / "evaluation" / split_name / "session_summary.json",
+            session_row,
+        )
+        session_rows.append(session_row)
+    episode_rows = []
+    for episode_uuid in sorted({row["episode_uuid"] for row in session_rows}):
+        cameras = [row for row in session_rows if row["episode_uuid"] == episode_uuid]
+        episode_rows.append(
+            {
+                "episode_uuid": episode_uuid,
+                "episode_rank": cameras[0]["episode_rank"],
+                "camera_count": len(cameras),
+                "iou_macro": float(np.mean([row["iou_macro"] for row in cameras])),
+            }
+        )
+    write_json(
+        output_root / f"pose_eval_{split_name}_iteration_{iteration:02d}.json",
+        {
+            "git": git_record(),
+            "split": split_name,
+            "iteration": iteration,
+            "requested_frames": len(records),
+            "successful_frames": sum(row["status"] == "success" for row in records),
+            "failed_frames": sum(row["status"] != "success" for row in records),
+            "frame_iou_macro": float(np.mean([row["metrics"]["iou"] for row in records])),
+            "session_iou_macro": float(np.mean([row["iou_macro"] for row in session_rows])),
+            "episode_iou_macro": float(np.mean([row["iou_macro"] for row in episode_rows])),
+            "sessions": session_rows,
+            "episodes": episode_rows,
+            "records": records,
+        },
     )
 
 
@@ -986,7 +1202,7 @@ def main() -> None:
         stage_roma(config, sessions, output_root, mask_root, args.iteration, args.max_frames)
     elif args.stage == "select-roma":
         stage_select_roma(config, sessions, output_root, args.iteration)
-    else:
+    elif args.stage == "caliball":
         stage_caliball(
             config,
             sessions,
@@ -994,6 +1210,16 @@ def main() -> None:
             mask_root,
             args.iteration,
             args.caliball_steps,
+            args.max_frames,
+        )
+    else:
+        stage_pose_eval(
+            config,
+            sessions,
+            output_root,
+            mask_root,
+            args.split,
+            args.iteration,
             args.max_frames,
         )
 
