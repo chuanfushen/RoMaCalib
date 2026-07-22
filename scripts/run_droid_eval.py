@@ -600,6 +600,7 @@ def prepare_caliball_bundle(
     data,
     joints: np.ndarray,
     gripper: np.ndarray,
+    max_frames: int | None = None,
 ) -> Path:
     caliball = config["caliball"]
     width = int(caliball["fit_width"])
@@ -615,6 +616,8 @@ def prepare_caliball_bundle(
     if not geom_ids:
         raise RuntimeError("No DROID visual geoms for CalibAll")
     indices = frame_indices(config, session, "fit")
+    if max_frames is not None:
+        indices = indices[:max_frames]
     vertices = []
     targets = []
     shared_faces = None
@@ -651,6 +654,7 @@ def stage_caliball(
     output_root: Path,
     iteration: int,
     steps: int | None,
+    max_frames: int | None,
 ) -> None:
     if not 0 <= iteration <= int(config["refinement"]["iterations"]):
         raise ValueError("iteration is outside configured range")
@@ -667,7 +671,15 @@ def stage_caliball(
             joints = np.asarray(handle["observation/robot_state/joint_positions"])
             gripper = np.asarray(handle["observation/robot_state/gripper_position"])
             bundle = prepare_caliball_bundle(
-                config, session, output_root, iteration, model, data, joints, gripper
+                config,
+                session,
+                output_root,
+                iteration,
+                model,
+                data,
+                joints,
+                gripper,
+                max_frames,
             )
             destination = iteration_dir / "caliball" / f"steps_{steps}"
             configured_command = config["paths"].get("caliball_command")
@@ -708,6 +720,7 @@ def stage_caliball(
                 data,
                 joints,
                 gripper,
+                max_frames,
             )
             roma_summary = json.loads((iteration_dir / "roma_summary.json").read_text(encoding="utf-8"))
             candidates = [
@@ -739,6 +752,7 @@ def stage_caliball(
                     data,
                     joints,
                     gripper,
+                    max_frames,
                 )
                 candidates.append(
                     {
@@ -857,7 +871,14 @@ def main() -> None:
     elif args.stage == "roma":
         stage_roma(config, sessions, output_root, args.iteration, args.max_frames)
     else:
-        stage_caliball(config, sessions, output_root, args.iteration, args.caliball_steps)
+        stage_caliball(
+            config,
+            sessions,
+            output_root,
+            args.iteration,
+            args.caliball_steps,
+            args.max_frames,
+        )
 
 
 if __name__ == "__main__":
