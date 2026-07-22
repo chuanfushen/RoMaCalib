@@ -347,6 +347,7 @@ def validation_score(
     data,
     joints: np.ndarray,
     gripper: np.ndarray,
+    max_frames: int | None = None,
 ) -> dict[str, Any]:
     args = SimpleNamespace(
         width=int(config["render"]["width"]),
@@ -354,6 +355,8 @@ def validation_score(
         visual_geom_group=int(config["render"]["visual_geom_group"]),
     )
     indices = frame_indices(config, session, "validation")
+    if max_frames is not None:
+        indices = indices[:max_frames]
     rows = []
     for index in indices:
         target_path = frame_dir(output_root, session, index) / "sam3_mask.png"
@@ -411,6 +414,16 @@ def roma_correspondences_for_frame(
     observed = masked_observed(output_root, session, index)
     destination = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}" / "matches" / f"{index:06d}"
     destination.mkdir(parents=True, exist_ok=True)
+    correspondence_path = destination / "correspondences.npz"
+    summary_path = destination / "summary.json"
+    if correspondence_path.is_file() and summary_path.is_file():
+        with np.load(correspondence_path) as cached:
+            return {
+                "frame_index": int(cached["frame_index"]),
+                "image_points": np.asarray(cached["image_points"], dtype=np.float32),
+                "world_points": np.asarray(cached["world_points"], dtype=np.float32),
+                "scores": np.asarray(cached["scores"], dtype=np.float32),
+            }
     if current_pose is None:
         render_paths = render_orbit_views(model, data, args, session.camera_matrix, destination / "renders")
     else:
@@ -445,9 +458,9 @@ def roma_correspondences_for_frame(
         "world_points": np.asarray(best["_world_points"], dtype=np.float32),
         "scores": np.asarray(best["_scores"], dtype=np.float32),
     }
-    np.savez_compressed(destination / "correspondences.npz", **record)
+    np.savez_compressed(correspondence_path, **record)
     write_json(
-        destination / "summary.json",
+        summary_path,
         {
             "frame_index": index,
             "iteration": iteration,
@@ -521,6 +534,7 @@ def stage_roma(
                 data,
                 joints,
                 gripper,
+                max_frames,
             )
         save_pose(iteration_dir / "roma_pose.npz", pose)
         if iteration == 0:
