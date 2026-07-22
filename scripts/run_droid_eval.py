@@ -58,7 +58,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument(
         "--stage",
-        choices=("audit", "masks", "raw-eval", "seed-t0", "roma", "select-roma", "caliball", "pose-eval"),
+        choices=(
+            "audit",
+            "masks",
+            "raw-eval",
+            "seed-t0",
+            "roma",
+            "select-roma",
+            "caliball",
+            "pose-eval",
+            "aggregate-masks",
+            "aggregate-eval",
+        ),
         required=True,
     )
     parser.add_argument("--scope", choices=("tuning", "full"), default="tuning")
@@ -68,6 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iteration", type=int, default=0)
     parser.add_argument("--caliball-steps", type=int, default=None)
     parser.add_argument("--source-output-root", type=Path, default=None)
+    parser.add_argument("--aggregate-kind", choices=("raw", "pose"), default="pose")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -75,6 +87,12 @@ def parse_args() -> argparse.Namespace:
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def shard_or_global_path(root: Path, stem: str, session_id: str | None) -> Path:
+    if session_id is None:
+        return root / f"{stem}.json"
+    return root / "manifests" / stem / f"{session_id}.json"
 
 
 def git_record() -> dict[str, Any]:
@@ -214,6 +232,7 @@ def stage_masks(
     mask_root: Path,
     split_name: str,
     max_frames: int | None,
+    shard_session: str | None = None,
 ) -> None:
     checkpoint = project_path(config["paths"]["sam3_checkpoint"])
     extractor = make_sam3_extractor(True, checkpoint)
@@ -256,8 +275,47 @@ def stage_masks(
             write_json(destination / "mask_summary.json", record)
             records.append(record)
     write_json(
-        mask_root / f"mask_manifest_{split_name}.json",
+        shard_or_global_path(mask_root, f"mask_manifest_{split_name}", shard_session),
         {"split": split_name, "record_count": len(records), "records": records},
+    )
+
+
+def stage_aggregate_masks(
+    sessions: list[DroidSession],
+    mask_root: Path,
+    split_name: str,
+) -> None:
+    stem = f"mask_manifest_{split_name}"
+    shard_root = mask_root / "manifests" / stem
+    expected = {session.session_id for session in sessions}
+    shard_paths = [shard_root / f"{session_id}.json" for session_id in sorted(expected)]
+    missing = [str(path) for path in shard_paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing {len(missing)} mask shards: {missing}")
+    records = []
+    shard_records = []
+    seen_frames: set[tuple[str, int]] = set()
+    for path in shard_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for row in payload["records"]:
+            key = (str(row["session_id"]), int(row["frame_index"]))
+            if key in seen_frames:
+                raise ValueError(f"Duplicate mask frame in shards: {key}")
+            seen_frames.add(key)
+            records.append(row)
+        shard_records.append({"path": str(path), "sha256": sha256_file(path)})
+    write_json(
+        mask_root / f"{stem}.json",
+        {
+            "git": git_record(),
+            "split": split_name,
+            "record_count": len(records),
+            "successful_records": sum(row["status"] == "success" for row in records),
+            "failed_records": sum(row["status"] != "success" for row in records),
+            "expected_sessions": len(expected),
+            "shards": shard_records,
+            "records": records,
+        },
     )
 
 
@@ -978,6 +1036,57 @@ def stage_caliball(
         )
 
 
+def evaluation_summary(
+    records: list[dict[str, Any]],
+    split_name: str,
+    iteration: int | None = None,
+) -> dict[str, Any]:
+    if not records:
+        raise ValueError(f"Cannot summarize an empty {split_name} evaluation")
+    session_rows = []
+    for session_id in sorted({row["session_id"] for row in records}):
+        rows = [row for row in records if row["session_id"] == session_id]
+        session_rows.append(
+            {
+                "session_id": session_id,
+                "episode_rank": rows[0]["episode_rank"],
+                "episode_uuid": rows[0]["episode_uuid"],
+                "camera_name": rows[0]["camera_name"],
+                "requested_frames": len(rows),
+                "successful_frames": sum(row["status"] == "success" for row in rows),
+                "iou_macro": float(np.mean([row["metrics"]["iou"] for row in rows])),
+            }
+        )
+    episode_rows = []
+    for episode_uuid in sorted({row["episode_uuid"] for row in session_rows}):
+        cameras = [row for row in session_rows if row["episode_uuid"] == episode_uuid]
+        episode_rows.append(
+            {
+                "episode_uuid": episode_uuid,
+                "episode_rank": cameras[0]["episode_rank"],
+                "camera_count": len(cameras),
+                "iou_macro": float(np.mean([row["iou_macro"] for row in cameras])),
+            }
+        )
+    payload = {
+        "git": git_record(),
+        "split": split_name,
+        "record_count": len(records),
+        "requested_frames": len(records),
+        "successful_frames": sum(row["status"] == "success" for row in records),
+        "failed_frames": sum(row["status"] != "success" for row in records),
+        "frame_iou_macro": float(np.mean([row["metrics"]["iou"] for row in records])),
+        "session_iou_macro": float(np.mean([row["iou_macro"] for row in session_rows])),
+        "episode_iou_macro": float(np.mean([row["iou_macro"] for row in episode_rows])),
+        "sessions": session_rows,
+        "episodes": episode_rows,
+        "records": records,
+    }
+    if iteration is not None:
+        payload["iteration"] = iteration
+    return payload
+
+
 def stage_raw_eval(
     config: dict,
     sessions: list[DroidSession],
@@ -985,6 +1094,7 @@ def stage_raw_eval(
     mask_root: Path,
     split_name: str,
     max_frames: int | None,
+    shard_session: str | None = None,
 ) -> None:
     args = SimpleNamespace(
         width=int(config["render"]["width"]),
@@ -1032,44 +1142,9 @@ def stage_raw_eval(
                 }
                 write_json(destination / "raw_eval.json", record)
                 all_records.append(record)
-    session_rows = []
-    for session_id in sorted({row["session_id"] for row in all_records}):
-        rows = [row for row in all_records if row["session_id"] == session_id]
-        session_rows.append(
-            {
-                "session_id": session_id,
-                "episode_rank": rows[0]["episode_rank"],
-                "episode_uuid": rows[0]["episode_uuid"],
-                "camera_name": rows[0]["camera_name"],
-                "requested_frames": len(rows),
-                "successful_frames": len(rows),
-                "iou_macro": float(np.mean([row["metrics"]["iou"] for row in rows])),
-            }
-        )
-    episode_rows = []
-    for episode_uuid in sorted({row["episode_uuid"] for row in session_rows}):
-        cameras = [row for row in session_rows if row["episode_uuid"] == episode_uuid]
-        episode_rows.append(
-            {
-                "episode_uuid": episode_uuid,
-                "episode_rank": cameras[0]["episode_rank"],
-                "camera_count": len(cameras),
-                "iou_macro": float(np.mean([row["iou_macro"] for row in cameras])),
-            }
-        )
     write_json(
-        output_root / f"raw_eval_{split_name}.json",
-        {
-            "git": git_record(),
-            "split": split_name,
-            "record_count": len(all_records),
-            "frame_iou_macro": float(np.mean([row["metrics"]["iou"] for row in all_records])),
-            "session_iou_macro": float(np.mean([row["iou_macro"] for row in session_rows])),
-            "episode_iou_macro": float(np.mean([row["iou_macro"] for row in episode_rows])),
-            "sessions": session_rows,
-            "episodes": episode_rows,
-            "records": all_records,
-        },
+        shard_or_global_path(output_root, f"raw_eval_{split_name}", shard_session),
+        evaluation_summary(all_records, split_name),
     )
 
 
@@ -1081,6 +1156,7 @@ def stage_pose_eval(
     split_name: str,
     iteration: int,
     max_frames: int | None,
+    shard_session: str | None = None,
 ) -> None:
     args = SimpleNamespace(
         width=int(config["render"]["width"]),
@@ -1196,34 +1272,53 @@ def stage_pose_eval(
             session_row,
         )
         session_rows.append(session_row)
-    episode_rows = []
-    for episode_uuid in sorted({row["episode_uuid"] for row in session_rows}):
-        cameras = [row for row in session_rows if row["episode_uuid"] == episode_uuid]
-        episode_rows.append(
-            {
-                "episode_uuid": episode_uuid,
-                "episode_rank": cameras[0]["episode_rank"],
-                "camera_count": len(cameras),
-                "iou_macro": float(np.mean([row["iou_macro"] for row in cameras])),
-            }
-        )
     write_json(
-        output_root / f"pose_eval_{split_name}_iteration_{iteration:02d}.json",
-        {
-            "git": git_record(),
-            "split": split_name,
-            "iteration": iteration,
-            "requested_frames": len(records),
-            "successful_frames": sum(row["status"] == "success" for row in records),
-            "failed_frames": sum(row["status"] != "success" for row in records),
-            "frame_iou_macro": float(np.mean([row["metrics"]["iou"] for row in records])),
-            "session_iou_macro": float(np.mean([row["iou_macro"] for row in session_rows])),
-            "episode_iou_macro": float(np.mean([row["iou_macro"] for row in episode_rows])),
-            "sessions": session_rows,
-            "episodes": episode_rows,
-            "records": records,
-        },
+        shard_or_global_path(
+            output_root,
+            f"pose_eval_{split_name}_iteration_{iteration:02d}",
+            shard_session,
+        ),
+        evaluation_summary(records, split_name, iteration),
     )
+
+
+def stage_aggregate_eval(
+    sessions: list[DroidSession],
+    output_root: Path,
+    split_name: str,
+    iteration: int,
+    kind: str,
+) -> None:
+    stem = (
+        f"raw_eval_{split_name}"
+        if kind == "raw"
+        else f"pose_eval_{split_name}_iteration_{iteration:02d}"
+    )
+    shard_root = output_root / "manifests" / stem
+    expected = {session.session_id for session in sessions}
+    shard_paths = [shard_root / f"{session_id}.json" for session_id in sorted(expected)]
+    missing = [str(path) for path in shard_paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing {len(missing)} evaluation shards: {missing}")
+    records = []
+    shard_records = []
+    seen_frames: set[tuple[str, int]] = set()
+    for path in shard_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for row in payload["records"]:
+            key = (str(row["session_id"]), int(row["frame_index"]))
+            if key in seen_frames:
+                raise ValueError(f"Duplicate evaluation frame in shards: {key}")
+            seen_frames.add(key)
+            records.append(row)
+        shard_records.append({"path": str(path), "sha256": sha256_file(path)})
+    summary = evaluation_summary(records, split_name, None if kind == "raw" else iteration)
+    summary["aggregation"] = {
+        "kind": kind,
+        "expected_sessions": len(expected),
+        "shards": shard_records,
+    }
+    write_json(output_root / f"{stem}.json", summary)
 
 
 def main() -> None:
@@ -1245,9 +1340,19 @@ def main() -> None:
     if args.stage == "audit":
         stage_audit(config, config_path, sessions, output_root)
     elif args.stage == "masks":
-        stage_masks(config, sessions, mask_root, args.split, args.max_frames)
+        stage_masks(config, sessions, mask_root, args.split, args.max_frames, args.session)
+    elif args.stage == "aggregate-masks":
+        stage_aggregate_masks(sessions, mask_root, args.split)
     elif args.stage == "raw-eval":
-        stage_raw_eval(config, sessions, output_root, mask_root, args.split, args.max_frames)
+        stage_raw_eval(
+            config,
+            sessions,
+            output_root,
+            mask_root,
+            args.split,
+            args.max_frames,
+            args.session,
+        )
     elif args.stage == "seed-t0":
         stage_seed_t0(sessions, output_root, args.source_output_root)
     elif args.stage == "roma":
@@ -1264,6 +1369,14 @@ def main() -> None:
             args.caliball_steps,
             args.max_frames,
         )
+    elif args.stage == "aggregate-eval":
+        stage_aggregate_eval(
+            sessions,
+            output_root,
+            args.split,
+            args.iteration,
+            args.aggregate_kind,
+        )
     else:
         stage_pose_eval(
             config,
@@ -1273,6 +1386,7 @@ def main() -> None:
             args.split,
             args.iteration,
             args.max_frames,
+            args.session,
         )
 
 
