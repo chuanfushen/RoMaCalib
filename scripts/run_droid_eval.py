@@ -701,7 +701,10 @@ def stage_caliball(
                 "--weight-decay",
                 str(config["caliball"]["weight_decay"]),
             ]
-            subprocess.run(command, check=True, cwd=Path(__file__).resolve().parents[1])
+            fit_result_path = destination / "fit_result.npz"
+            fit_summary_path = destination / "fit_summary.json"
+            if not fit_result_path.is_file() or not fit_summary_path.is_file():
+                subprocess.run(command, check=True, cwd=Path(__file__).resolve().parents[1])
             fit = load_pose(destination / "fit_result.npz")
             refined_pose = {
                 "world_to_camera": np.asarray(fit["refined_world_to_camera"], dtype=np.float64),
@@ -740,8 +743,25 @@ def stage_caliball(
                 },
             ]
             if iteration > 0:
-                parent_path = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration - 1:02d}" / "selected_pose.npz"
+                parent_iteration_dir = (
+                    output_root
+                    / "sessions"
+                    / session.session_id
+                    / "poses"
+                    / f"iteration_{iteration - 1:02d}"
+                )
+                parent_path = parent_iteration_dir / "selected_pose.npz"
                 parent_pose = load_pose(parent_path)
+                parent_source_iteration = iteration - 1
+                parent_selection_path = (
+                    parent_iteration_dir
+                    / "caliball"
+                    / f"steps_{steps}"
+                    / "selection_summary.json"
+                )
+                if parent_selection_path.is_file():
+                    parent_selection = json.loads(parent_selection_path.read_text(encoding="utf-8"))
+                    parent_source_iteration = int(parent_selection["selected"]["iteration"])
                 parent_validation = validation_score(
                     config,
                     session,
@@ -757,7 +777,7 @@ def stage_caliball(
                 candidates.append(
                     {
                         "name": "parent",
-                        "iteration": iteration - 1,
+                        "iteration": parent_source_iteration,
                         "validation_iou": float(parent_validation["iou_macro"]),
                         "pose_delta": {"translation_m": 0.0, "rotation_deg": 0.0},
                         "pose": parent_pose,
