@@ -556,14 +556,16 @@ def imcui_keypoint_ransac_mask(
     if fundamental is not None:
         h0, w0 = image0_shape[:2]
         try:
-            _, h1, h2 = cv2.stereoRectifyUncalibrated(
+            rectified, h1, h2 = cv2.stereoRectifyUncalibrated(
                 points0.reshape(-1, 2),
                 points1.reshape(-1, 2),
                 np.asarray(fundamental),
                 imgSize=(w0, h0),
             )
-            geom_info["H1"] = h1.tolist()
-            geom_info["H2"] = h2.tolist()
+            geom_info["stereo_rectified"] = bool(rectified)
+            if rectified and h1 is not None and h2 is not None:
+                geom_info["H1"] = h1.tolist()
+                geom_info["H2"] = h2.tolist()
         except cv2.error:
             pass
     return mask_h, "success", geom_info
