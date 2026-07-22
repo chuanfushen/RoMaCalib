@@ -1,0 +1,54 @@
+[paths]
+data_root = "data/droid"
+mujoco_xml = "assets/third_party/droid_franka_robotiq85/droid_panda_2f85.xml"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+output_root = "outputs/droid_r10_v1"
+caliball_command = ["conda", "run", "-n", "caliball", "python"]
+
+[data]
+selection_seed = 20260722
+cameras = ["ext1", "ext2"]
+fit_frames = 16
+validation_frames = 8
+heldout_modulus = 5
+heldout_remainder = 0
+tuning_episode_count = 2
+
+[render]
+width = 1280
+height = 720
+visual_geom_group = 2
+views = 6
+distance_scale = 1.8
+min_distance = 0.5
+elevation = -15.0
+azimuth_offset = 0.0
+
+[matching]
+device = "cuda"
+mask_prompt = "robotic arm"
+max_keypoints = 2048
+score_filter = 0.0
+topk_per_frame = 64
+ransac_threshold_px = 4.0
+pnp_threshold_px = 5.0
+pnp_iterations = 10000
+pnp_confidence = 0.999
+seed = 20260717
+
+[refinement]
+iterations = 3
+validation_best = true
+
+[caliball]
+enabled = true
+implementation = "integration_v0"
+candidate_steps = [200, 500, 1000]
+fit_width = 640
+fit_height = 360
+learning_rate = 0.0005
+weight_decay = 0.000001
+gradient_clip_norm = 1.0
+renderer_replay_iou_min = 0.95
+translation_max_m = 0.20
+rotation_max_deg = 20.0
