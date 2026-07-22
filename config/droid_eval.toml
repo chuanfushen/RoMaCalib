@@ -3,6 +3,7 @@ data_root = "data/droid"
 mujoco_xml = "assets/third_party/droid_franka_robotiq85/droid_panda_2f85.xml"
 sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
 output_root = "outputs/droid_r10_v1"
+mask_root = "outputs/droid_r10_v1_masks"
 caliball_command = ["conda", "run", "-n", "caliball", "python"]
 
 [data]

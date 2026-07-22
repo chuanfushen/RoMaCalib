@@ -55,7 +55,11 @@ from romav2.droid_config import load_config, project_path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--stage", choices=("audit", "masks", "raw-eval", "roma", "caliball"), required=True)
+    parser.add_argument(
+        "--stage",
+        choices=("audit", "masks", "raw-eval", "roma", "select-roma", "caliball"),
+        required=True,
+    )
     parser.add_argument("--scope", choices=("tuning", "full"), default="tuning")
     parser.add_argument("--split", choices=("fit", "validation", "heldout", "all-calibration"), default="validation")
     parser.add_argument("--session", default=None, help="Optional exact session id.")
@@ -205,7 +209,7 @@ def frame_dir(output_root: Path, session: DroidSession, index: int) -> Path:
 def stage_masks(
     config: dict,
     sessions: list[DroidSession],
-    output_root: Path,
+    mask_root: Path,
     split_name: str,
     max_frames: int | None,
 ) -> None:
@@ -219,7 +223,7 @@ def stage_masks(
             indices = indices[:max_frames]
         images = read_video_frames(session.video_path, indices)
         for index in indices:
-            destination = frame_dir(output_root, session, index)
+            destination = frame_dir(mask_root, session, index)
             destination.mkdir(parents=True, exist_ok=True)
             image = images[index]
             image_path = destination / "real.png"
@@ -250,7 +254,7 @@ def stage_masks(
             write_json(destination / "mask_summary.json", record)
             records.append(record)
     write_json(
-        output_root / f"mask_manifest_{split_name}.json",
+        mask_root / f"mask_manifest_{split_name}.json",
         {"split": split_name, "record_count": len(records), "records": records},
     )
 
@@ -341,6 +345,7 @@ def validation_score(
     config: dict,
     session: DroidSession,
     output_root: Path,
+    mask_root: Path,
     pose: dict[str, np.ndarray],
     destination: Path,
     model,
@@ -359,7 +364,7 @@ def validation_score(
         indices = indices[:max_frames]
     rows = []
     for index in indices:
-        target_path = frame_dir(output_root, session, index) / "sam3_mask.png"
+        target_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
         if not target_path.is_file():
             raise FileNotFoundError(f"Generate validation masks first: {target_path}")
         target = np.asarray(Image.open(target_path).convert("L")) > 0
@@ -390,8 +395,8 @@ def validation_score(
     }
 
 
-def masked_observed(output_root: Path, session: DroidSession, index: int) -> np.ndarray:
-    destination = frame_dir(output_root, session, index)
+def masked_observed(mask_root: Path, session: DroidSession, index: int) -> np.ndarray:
+    destination = frame_dir(mask_root, session, index)
     image = np.asarray(Image.open(destination / "real.png").convert("RGB"))
     mask = np.asarray(Image.open(destination / "sam3_mask.png").convert("L")) > 0
     observed = image.copy()
@@ -403,6 +408,7 @@ def roma_correspondences_for_frame(
     config: dict,
     session: DroidSession,
     output_root: Path,
+    mask_root: Path,
     iteration: int,
     index: int,
     current_pose: dict[str, np.ndarray] | None,
@@ -411,7 +417,7 @@ def roma_correspondences_for_frame(
     data,
     args: SimpleNamespace,
 ) -> dict[str, Any]:
-    observed = masked_observed(output_root, session, index)
+    observed = masked_observed(mask_root, session, index)
     destination = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}" / "matches" / f"{index:06d}"
     destination.mkdir(parents=True, exist_ok=True)
     correspondence_path = destination / "correspondences.npz"
@@ -476,6 +482,7 @@ def stage_roma(
     config: dict,
     sessions: list[DroidSession],
     output_root: Path,
+    mask_root: Path,
     iteration: int,
     max_frames: int | None,
 ) -> None:
@@ -505,6 +512,7 @@ def stage_roma(
                     config,
                     session,
                     output_root,
+                    mask_root,
                     iteration,
                     index,
                     current_pose,
@@ -528,6 +536,7 @@ def stage_roma(
                 config,
                 session,
                 output_root,
+                mask_root,
                 pose,
                 iteration_dir / "roma_candidate",
                 model,
@@ -548,6 +557,64 @@ def stage_roma(
                 "pnp": pnp,
                 "validation": score,
                 "world_to_camera": pose["world_to_camera"].tolist(),
+            },
+        )
+
+
+def stage_select_roma(
+    config: dict,
+    sessions: list[DroidSession],
+    output_root: Path,
+    iteration: int,
+) -> None:
+    if not 1 <= iteration <= int(config["refinement"]["iterations"]):
+        raise ValueError("select-roma requires an iteration in [1, refinement.iterations]")
+    for session in sessions:
+        poses_root = output_root / "sessions" / session.session_id / "poses"
+        iteration_dir = poses_root / f"iteration_{iteration:02d}"
+        previous_dir = poses_root / f"iteration_{iteration - 1:02d}"
+        roma_pose = load_pose(iteration_dir / "roma_pose.npz")
+        parent_pose = load_pose(previous_dir / "selected_pose.npz")
+        roma_summary = json.loads((iteration_dir / "roma_summary.json").read_text(encoding="utf-8"))
+        previous_selection_path = previous_dir / "roma_selection_summary.json"
+        if previous_selection_path.is_file():
+            previous_selection = json.loads(previous_selection_path.read_text(encoding="utf-8"))
+            parent_iteration = int(previous_selection["selected"]["iteration"])
+            parent_validation_iou = float(previous_selection["selected"]["validation_iou"])
+        else:
+            previous_roma = json.loads((previous_dir / "roma_summary.json").read_text(encoding="utf-8"))
+            parent_iteration = iteration - 1
+            parent_validation_iou = float(previous_roma["validation"]["iou_macro"])
+        candidates = [
+            {
+                "name": "roma",
+                "iteration": iteration,
+                "validation_iou": float(roma_summary["validation"]["iou_macro"]),
+                "pose_delta": {"translation_m": 0.0, "rotation_deg": 0.0},
+                "pose": roma_pose,
+            },
+            {
+                "name": "parent",
+                "iteration": parent_iteration,
+                "validation_iou": parent_validation_iou,
+                "pose_delta": {"translation_m": 0.0, "rotation_deg": 0.0},
+                "pose": parent_pose,
+            },
+        ]
+        selected = dict(select_best_iteration(candidates))
+        save_pose(iteration_dir / "selected_pose.npz", selected.pop("pose"))
+        serializable_candidates = []
+        for candidate in candidates:
+            candidate = dict(candidate)
+            candidate.pop("pose", None)
+            serializable_candidates.append(candidate)
+        write_json(
+            iteration_dir / "roma_selection_summary.json",
+            {
+                "session_id": session.session_id,
+                "iteration": iteration,
+                "candidates": serializable_candidates,
+                "selected": selected,
             },
         )
 
@@ -595,6 +662,7 @@ def prepare_caliball_bundle(
     config: dict,
     session: DroidSession,
     output_root: Path,
+    mask_root: Path,
     iteration: int,
     model,
     data,
@@ -629,7 +697,7 @@ def prepare_caliball_bundle(
         elif not np.array_equal(shared_faces, faces):
             raise RuntimeError("DROID articulated meshes changed topology")
         vertices.append(frame_vertices)
-        mask_path = frame_dir(output_root, session, index) / "sam3_mask.png"
+        mask_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
         target = Image.open(mask_path).convert("L").resize((width, height), Image.Resampling.NEAREST)
         targets.append(np.asarray(target) > 0)
     iteration_dir = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}"
@@ -652,6 +720,7 @@ def stage_caliball(
     config: dict,
     sessions: list[DroidSession],
     output_root: Path,
+    mask_root: Path,
     iteration: int,
     steps: int | None,
     max_frames: int | None,
@@ -674,6 +743,7 @@ def stage_caliball(
                 config,
                 session,
                 output_root,
+                mask_root,
                 iteration,
                 model,
                 data,
@@ -717,6 +787,7 @@ def stage_caliball(
                 config,
                 session,
                 output_root,
+                mask_root,
                 refined_pose,
                 destination / "refined_candidate",
                 model,
@@ -766,6 +837,7 @@ def stage_caliball(
                     config,
                     session,
                     output_root,
+                    mask_root,
                     parent_pose,
                     destination / "parent_candidate",
                     model,
@@ -815,6 +887,7 @@ def stage_raw_eval(
     config: dict,
     sessions: list[DroidSession],
     output_root: Path,
+    mask_root: Path,
     split_name: str,
     max_frames: int | None,
 ) -> None:
@@ -834,7 +907,7 @@ def stage_raw_eval(
             gripper = np.asarray(handle["observation/robot_state/gripper_position"])
             for index in indices:
                 destination = frame_dir(output_root, session, index)
-                mask_path = destination / "sam3_mask.png"
+                mask_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
                 if not mask_path.is_file():
                     raise FileNotFoundError(f"Generate {split_name} masks first: {mask_path}")
                 target = np.asarray(Image.open(mask_path).convert("L")) > 0
@@ -872,6 +945,7 @@ def main() -> None:
     config, config_path = load_config(args.config)
     data_root = project_path(config["paths"]["data_root"])
     output_root = project_path(config["paths"]["output_root"])
+    mask_root = project_path(config["paths"].get("mask_root", config["paths"]["output_root"]))
     sessions = select_sessions(config, build_sessions(data_root), args)
     print(f"config={config_path}")
     print(f"stage={args.stage} scope={args.scope} split={args.split} sessions={len(sessions)}")
@@ -885,16 +959,19 @@ def main() -> None:
     if args.stage == "audit":
         stage_audit(config, config_path, sessions, output_root)
     elif args.stage == "masks":
-        stage_masks(config, sessions, output_root, args.split, args.max_frames)
+        stage_masks(config, sessions, mask_root, args.split, args.max_frames)
     elif args.stage == "raw-eval":
-        stage_raw_eval(config, sessions, output_root, args.split, args.max_frames)
+        stage_raw_eval(config, sessions, output_root, mask_root, args.split, args.max_frames)
     elif args.stage == "roma":
-        stage_roma(config, sessions, output_root, args.iteration, args.max_frames)
+        stage_roma(config, sessions, output_root, mask_root, args.iteration, args.max_frames)
+    elif args.stage == "select-roma":
+        stage_select_roma(config, sessions, output_root, args.iteration)
     else:
         stage_caliball(
             config,
             sessions,
             output_root,
+            mask_root,
             args.iteration,
             args.caliball_steps,
             args.max_frames,

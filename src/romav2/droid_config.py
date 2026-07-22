@@ -16,6 +16,7 @@ ENV_OVERRIDES = {
     "DROID_MUJOCO_XML": ("paths", "mujoco_xml"),
     "DROID_SAM3_CHECKPOINT": ("paths", "sam3_checkpoint"),
     "DROID_OUTPUT_ROOT": ("paths", "output_root"),
+    "DROID_MASK_ROOT": ("paths", "mask_root"),
     "DROID_CALIBALL_PYTHON": ("paths", "caliball_python"),
 }
 
