@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -57,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument(
         "--stage",
-        choices=("audit", "masks", "raw-eval", "roma", "select-roma", "caliball", "pose-eval"),
+        choices=("audit", "masks", "raw-eval", "seed-t0", "roma", "select-roma", "caliball", "pose-eval"),
         required=True,
     )
     parser.add_argument("--scope", choices=("tuning", "full"), default="tuning")
@@ -66,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--iteration", type=int, default=0)
     parser.add_argument("--caliball-steps", type=int, default=None)
+    parser.add_argument("--source-output-root", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -644,6 +646,54 @@ def stage_select_roma(
         )
 
 
+def stage_seed_t0(
+    sessions: list[DroidSession],
+    output_root: Path,
+    source_output_root: Path | None,
+) -> None:
+    if source_output_root is None:
+        raise ValueError("seed-t0 requires --source-output-root")
+    source_output_root = source_output_root.expanduser().resolve()
+    records = []
+    for session in sessions:
+        source_dir = source_output_root / "sessions" / session.session_id / "poses" / "iteration_00"
+        destination_dir = output_root / "sessions" / session.session_id / "poses" / "iteration_00"
+        files = ("roma_pose.npz", "selected_pose.npz", "roma_summary.json")
+        if any((destination_dir / name).exists() for name in files):
+            raise FileExistsError(f"Refusing to overwrite seeded T0: {destination_dir}")
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        copied = []
+        for name in files:
+            source = source_dir / name
+            if not source.is_file():
+                raise FileNotFoundError(source)
+            destination = destination_dir / name
+            shutil.copy2(source, destination)
+            source_sha256 = sha256_file(source)
+            destination_sha256 = sha256_file(destination)
+            if source_sha256 != destination_sha256:
+                raise RuntimeError(f"T0 seed checksum mismatch: {source} -> {destination}")
+            copied.append(
+                {
+                    "name": name,
+                    "source": str(source),
+                    "destination": str(destination),
+                    "sha256": source_sha256,
+                }
+            )
+        records.append({"session_id": session.session_id, "files": copied})
+    write_json(
+        output_root / "seed_t0_manifest.json",
+        {
+            "git": git_record(),
+            "source_output_root": str(source_output_root),
+            "destination_output_root": str(output_root.resolve()),
+            "session_count": len(records),
+            "records": records,
+        },
+    )
+
+
 def local_geom_mesh(model, geom_id: int) -> tuple[np.ndarray, np.ndarray]:
     if int(model.geom_type[geom_id]) != int(mujoco.mjtGeom.mjGEOM_MESH):
         raise NotImplementedError(
@@ -1198,6 +1248,8 @@ def main() -> None:
         stage_masks(config, sessions, mask_root, args.split, args.max_frames)
     elif args.stage == "raw-eval":
         stage_raw_eval(config, sessions, output_root, mask_root, args.split, args.max_frames)
+    elif args.stage == "seed-t0":
+        stage_seed_t0(sessions, output_root, args.source_output_root)
     elif args.stage == "roma":
         stage_roma(config, sessions, output_root, mask_root, args.iteration, args.max_frames)
     elif args.stage == "select-roma":
