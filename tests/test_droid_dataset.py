@@ -22,14 +22,21 @@ def test_camera_to_base_vector_is_inverted() -> None:
     np.testing.assert_allclose(world_to_camera[:3, 3], [-1, -2, -3])
 
 
-def test_split_is_disjoint_and_heldout_is_mod_five() -> None:
+def test_split_is_disjoint_complete_and_reserves_mod_five() -> None:
     split = make_frame_split(119, fit_count=16, validation_count=8)
     assert len(split.fit) == 16
     assert len(split.validation) == 8
-    assert all(index % 5 == 0 for index in split.heldout)
+    assert len(split.heldout) == 119 - 16 - 8
+    assert all(index in split.heldout for index in range(0, 119, 5))
     assert not (set(split.fit) & set(split.validation))
     assert not (set(split.fit) & set(split.heldout))
     assert not (set(split.validation) & set(split.heldout))
+    assert set((*split.fit, *split.validation, *split.heldout)) == set(range(119))
+
+
+def test_split_honors_configurable_heldout_reservation() -> None:
+    split = make_frame_split(30, fit_count=4, validation_count=2, heldout_modulus=3, heldout_remainder=1)
+    assert all(index in split.heldout for index in range(1, 30, 3))
 
 
 def test_select_best_iteration_uses_validation_and_earlier_tie_break() -> None:

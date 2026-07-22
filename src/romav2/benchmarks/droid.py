@@ -176,13 +176,25 @@ def evenly_spaced(indices: Iterable[int], count: int) -> tuple[int, ...]:
     return selected
 
 
-def make_frame_split(video_frame_count: int, fit_count: int = 16, validation_count: int = 8) -> FrameSplit:
+def make_frame_split(
+    video_frame_count: int,
+    fit_count: int = 16,
+    validation_count: int = 8,
+    heldout_modulus: int = 5,
+    heldout_remainder: int = 0,
+) -> FrameSplit:
+    if heldout_modulus <= 0:
+        raise ValueError("heldout_modulus must be positive")
+    if not 0 <= heldout_remainder < heldout_modulus:
+        raise ValueError("heldout_remainder must be in [0, heldout_modulus)")
     all_indices = tuple(range(int(video_frame_count)))
-    heldout = tuple(index for index in all_indices if index % 5 == 0)
-    calibration = tuple(index for index in all_indices if index % 5 != 0)
+    reserved = tuple(index for index in all_indices if index % heldout_modulus == heldout_remainder)
+    calibration = tuple(index for index in all_indices if index not in set(reserved))
     validation = evenly_spaced(calibration, min(validation_count, len(calibration)))
     fit_candidates = tuple(index for index in calibration if index not in set(validation))
     fit = evenly_spaced(fit_candidates, min(fit_count, len(fit_candidates)))
+    calibration_indices = set((*fit, *validation))
+    heldout = tuple(index for index in all_indices if index not in calibration_indices)
     split = FrameSplit(fit=fit, validation=validation, heldout=heldout)
     split.validate()
     return split

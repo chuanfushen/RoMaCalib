@@ -147,6 +147,8 @@ def frame_indices(config: dict, session: DroidSession, split_name: str) -> tuple
         video_frames,
         fit_count=int(config["data"]["fit_frames"]),
         validation_count=int(config["data"]["validation_frames"]),
+        heldout_modulus=int(config["data"]["heldout_modulus"]),
+        heldout_remainder=int(config["data"]["heldout_remainder"]),
     )
     if split_name == "all-calibration":
         return tuple(sorted((*split.fit, *split.validation)))
@@ -187,6 +189,8 @@ def stage_audit(config: dict, config_path: Path, sessions: list[DroidSession], o
             video["frame_count"],
             fit_count=int(config["data"]["fit_frames"]),
             validation_count=int(config["data"]["validation_frames"]),
+            heldout_modulus=int(config["data"]["heldout_modulus"]),
+            heldout_remainder=int(config["data"]["heldout_remainder"]),
         )
         records.append(
             {
