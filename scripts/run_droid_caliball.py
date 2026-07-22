@@ -56,10 +56,13 @@ def main() -> None:
     faces = torch.as_tensor(bundle["faces"], dtype=torch.int32, device=args.device)
     camera_matrix = torch.as_tensor(bundle["camera_matrix"], dtype=torch.float32, device=args.device)
     targets = torch.as_tensor(bundle["target_masks"], dtype=torch.float32, device=args.device)
+    mujoco_initial_masks = np.asarray(bundle["mujoco_initial_masks"], dtype=np.uint8)
     initial = torch.as_tensor(bundle["initial_world_to_camera"], dtype=torch.float32, device=args.device)
     frame_indices = np.asarray(bundle["frame_indices"], dtype=np.int64)
     if vertices.ndim != 3 or targets.ndim != 3 or len(vertices) != len(targets):
         raise ValueError("Expected vertices[F,V,3] and target_masks[F,H,W]")
+    if mujoco_initial_masks.shape != tuple(targets.shape):
+        raise ValueError("mujoco_initial_masks must match target_masks shape")
     if faces.ndim != 2 or faces.shape[1] != 3:
         raise ValueError("Expected one shared faces[N,3] topology")
     frame_count, height, width = targets.shape
@@ -150,6 +153,7 @@ def main() -> None:
         refined = solver.transform()
         initial_ious = []
         refined_ious = []
+        renderer_replay_ious = []
         initial_dof = se3_log_map(
             initial[None].permute(0, 2, 1), eps=1e-5, backend="opencv", test_acc=False
         )[0]
@@ -157,6 +161,9 @@ def main() -> None:
             solver.dof.copy_(initial_dof)
             initial_rendered = solver.render(frame_ordinal, solver.transform())
             initial_ious.append(mask_iou(initial_rendered.cpu().numpy(), targets[frame_ordinal].cpu().numpy()))
+            renderer_replay_ious.append(
+                mask_iou(initial_rendered.cpu().numpy(), mujoco_initial_masks[frame_ordinal])
+            )
             solver.dof.copy_(best_dof)
             refined_rendered = solver.render(frame_ordinal, solver.transform())
             refined_ious.append(mask_iou(refined_rendered.cpu().numpy(), targets[frame_ordinal].cpu().numpy()))
@@ -172,6 +179,7 @@ def main() -> None:
         frame_indices=frame_indices,
         initial_fit_ious=np.asarray(initial_ious, dtype=np.float64),
         refined_fit_ious=np.asarray(refined_ious, dtype=np.float64),
+        renderer_replay_ious=np.asarray(renderer_replay_ious, dtype=np.float64),
     )
     write_json(
         args.output_dir / "fit_summary.json",
@@ -196,6 +204,8 @@ def main() -> None:
             "best_loss": best_loss,
             "initial_fit_iou_macro": float(np.mean(initial_ious)),
             "refined_fit_iou_macro": float(np.mean(refined_ious)),
+            "renderer_replay_iou_macro": float(np.mean(renderer_replay_ious)),
+            "renderer_replay_ious": renderer_replay_ious,
             "history": history,
             "elapsed_seconds": time.monotonic() - started,
             "refined_world_to_camera": refined.tolist(),

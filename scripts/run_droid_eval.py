@@ -686,8 +686,12 @@ def prepare_caliball_bundle(
     indices = frame_indices(config, session, "fit")
     if max_frames is not None:
         indices = indices[:max_frames]
+    iteration_dir = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}"
+    initial_pose = load_pose(iteration_dir / "roma_pose.npz")
+    render_args = SimpleNamespace(width=width, height=height, visual_geom_group=geom_group)
     vertices = []
     targets = []
+    mujoco_initial_masks = []
     shared_faces = None
     for index in indices:
         set_droid_state(model, data, joints[index], gripper[index])
@@ -700,8 +704,16 @@ def prepare_caliball_bundle(
         mask_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
         target = Image.open(mask_path).convert("L").resize((width, height), Image.Resampling.NEAREST)
         targets.append(np.asarray(target) > 0)
-    iteration_dir = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}"
-    initial_pose = load_pose(iteration_dir / "roma_pose.npz")
+        _, _, rendered = render_pose_mask(
+            model,
+            data,
+            render_args,
+            camera_matrix,
+            initial_pose["world_to_camera"],
+            iteration_dir / "caliball" / "renderer_replay_reference" / f"{index:06d}",
+            stem="mujoco_initial",
+        )
+        mujoco_initial_masks.append(rendered)
     bundle_path = iteration_dir / "caliball" / "bundle.npz"
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -710,6 +722,7 @@ def prepare_caliball_bundle(
         faces=np.asarray(shared_faces, dtype=np.int32),
         camera_matrix=camera_matrix.astype(np.float32),
         target_masks=np.stack(targets).astype(np.uint8),
+        mujoco_initial_masks=np.stack(mujoco_initial_masks).astype(np.uint8),
         initial_world_to_camera=np.asarray(initial_pose["world_to_camera"], dtype=np.float64),
         frame_indices=np.asarray(indices, dtype=np.int64),
     )
@@ -776,6 +789,7 @@ def stage_caliball(
             if not fit_result_path.is_file() or not fit_summary_path.is_file():
                 subprocess.run(command, check=True, cwd=Path(__file__).resolve().parents[1])
             fit = load_pose(destination / "fit_result.npz")
+            fit_summary = json.loads(fit_summary_path.read_text(encoding="utf-8"))
             refined_pose = {
                 "world_to_camera": np.asarray(fit["refined_world_to_camera"], dtype=np.float64),
                 "camera_to_world": np.linalg.inv(np.asarray(fit["refined_world_to_camera"], dtype=np.float64)),
@@ -860,7 +874,11 @@ def stage_caliball(
             refined_delta["translation_m"] <= float(config["caliball"]["translation_max_m"])
             and refined_delta["rotation_deg"] <= float(config["caliball"]["rotation_max_deg"])
         )
-        if not numerically_valid or not within_trust_region:
+        renderer_replay_iou = float(fit_summary["renderer_replay_iou_macro"])
+        renderer_replay_valid = bool(
+            renderer_replay_iou >= float(config["caliball"]["renderer_replay_iou_min"])
+        )
+        if not numerically_valid or not within_trust_region or not renderer_replay_valid:
             candidates = [candidate for candidate in candidates if candidate["name"] != "caliball"]
         selected = select_best_iteration(candidates)
         save_pose(iteration_dir / "selected_pose.npz", selected.pop("pose"))
@@ -877,6 +895,8 @@ def stage_caliball(
                 "steps": steps,
                 "numerically_valid": numerically_valid,
                 "within_trust_region": within_trust_region,
+                "renderer_replay_iou": renderer_replay_iou,
+                "renderer_replay_valid": renderer_replay_valid,
                 "candidates": serializable_candidates,
                 "selected": selected,
             },
