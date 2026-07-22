@@ -1,7 +1,7 @@
 # DROID-R10-v1 Experiment Tracker
 
 状态更新时间：2026-07-22
-当前阶段：三轮迭代 + CalibAll 协议已形成，尚未实现/运行 DROID 正式实验。
+当前阶段：三轮迭代 + CalibAll 已实现并完成 smoke；4-session 小样本消融准备启动。
 
 ## 固定输入
 
@@ -16,6 +16,7 @@
 | Default calibration frames | 16/session | proposed/freeze before run |
 | Refinement iterations | run exactly 3 and retain `T0..T3`; select validation-best per session | frozen |
 | CalibAll candidate budgets | 200 / 500 / 1000 steps | frozen for small-sample tuning only |
+| Renderer replay gate | exact mask IoU >= 0.85 | amended from untested 0.95 after 2-frame smoke (0.8810), before B1 and without held-out |
 | Config selection split | 2 episodes × 2 cameras; calibration-only fit/validation | freeze manifest before masks/metrics |
 | Final config selection | validation macro IoU, Q10, fallback/failure, runtime (lexicographic) | frozen |
 | SAM prompt | `robotic arm` | frozen from current project |
@@ -34,9 +35,11 @@
 | M1.1 | DROID adapter/config implementation | local | TBD | n/a | pending | no DROID runner exists locally |
 | M1.2 | Metrics + hierarchical bootstrap tests | local | TBD | n/a | pending | IoU failure denominator must be tested |
 | M1.3 | Visualization implementation | local | TBD | n/a | pending | native + 320×180 outputs |
-| M1.4 | ruff/pytest/dry-run | local | TBD | n/a | pending | |
-| M2 | 1 session × 5-frame, 3-iteration CalibAll smoke | cf / one idle GPU | TBD | TBD | pending | verify T0..T3 artifacts and fallback |
-| B1/M3 | Small-sample config ablation | cf / one idle GPU | TBD | TBD | pending | S0, R3-G, S0+C500, R3-G+C3 at 200/500/1000 |
+| M1.4 | ruff/pytest/dry-run | local + cf | `5e3578a` | n/a | complete | Ruff passed; 6 targeted tests passed on cf existing environment |
+| M2 | 1 session × 5-frame, 3-iteration CalibAll smoke | cf / GPU 0 | `395c11a` | `outputs/droid_r10_v1_sA_fe99a7b_smoke` | complete | T0..T3 completed; validation-best selected T1; CalibAll fallback verified |
+| M2.1 | Shared-mask + renderer replay smoke | cf / GPU 0 | `694f386`, `5e3578a` | `outputs/droid_r10_v1_sA_694f386_refactor_smoke` | complete | shared masks read correctly; replay IoU 0.8810; gate behavior verified |
+| B1 masks | 2 episodes × 2 cameras, 16 fit + 8 validation | cf / GPU 0 | `694f386` | `outputs/droid_r10_v1_sA_694f386_tuning_masks` | complete | 64 fit + 32 validation; 96/96 success; 96 PNG masks/real/summary |
+| B1/M3 | Small-sample config ablation | cf / GPUs TBD | final frozen B1 commit TBD | independent roots | ready | S0, R3-G, S0+C500, R3-G+C3 at 200/500/1000 |
 | B2 | Final main comparison | cf / one idle GPU | same frozen commit | TBD | pending | raw calib, S0, R3-G, selected R3-G+C3 |
 | B3 | Iteration/CalibAll contribution | cf / one idle GPU | same as B1 | reuse B1 | pending | report all T0/T1/T2/T3 candidates and selected iteration |
 | B4 | Model/pseudo-GT audit | cf + manual review | same as B1 | TBD | pending | 100-frame blind audit |

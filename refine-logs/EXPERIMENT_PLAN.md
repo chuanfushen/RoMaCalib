@@ -1,6 +1,6 @@
 # DROID CtRNet-X-like Experiment Plan (DROID-R10-v1)
 
-状态：三轮迭代 + CalibAll 方案冻结候选，尚未实现、尚未运行 DROID GPU 实验
+状态：三轮迭代 + CalibAll 已实现并完成单 session smoke；小样本消融进行中
 日期：2026-07-22
 目标服务器：cf / server A
 数据根目录：`/data1/scf/Generative/data1/datasets/droid_raw_random10_seed20260722`
@@ -194,8 +194,14 @@ hand，但 cf 的 Generative 第三方目录已经保存了可复用的模型来
   `integration_v0`（Adam, lr=5e-4, weight decay=1e-6, gradient clip=1.0,
   cosine warm restarts, best-loss checkpoint），不把作者原始 10k-step 配方扩展到正式网格。
 - 每次 CalibAll 的输入是当轮 RoMaCalib pose；fit mask 只来自 16 个 fit frames。接受条件：
-  数值有效、renderer replay IoU >= 0.95、位移 <= 0.20 m、旋转 <= 20 deg，并且 8 个
+  数值有效、renderer replay IoU >= 0.85、位移 <= 0.20 m、旋转 <= 20 deg，并且 8 个
   disjoint calibration-validation frames 的 macro IoU 相对进入该轮前不下降。否则回退。
+
+协议修订（2026-07-22，held-out 未解封）：2-frame smoke 显示相同初始 pose 下
+NVDiffrast 与 MuJoCo 的 exact silhouette replay IoU 为 0.8810，原先未实测的 0.95
+阈值会系统性拒绝坐标约定正确的候选。因此在 B1 前将 replay gate 修订为 0.85；
+该 gate 只检测渲染器/坐标约定的明显错误，最终候选仍必须通过 disjoint validation IoU
+和 pose trust-region gate。B1 开始后不再调整该阈值。
 - 配置级选择输出：`selected_config.toml/json`、候选配置排名、每轮 validation IoU、pose delta、
   accepted/rejected reason、runtime。胜出配置冻结后进入 B2；正式实验仍允许每个 session
   按同一条预注册 validation 规则在 `T0..T3` 中选择不同的最佳轮次。

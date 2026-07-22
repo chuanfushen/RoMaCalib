@@ -50,6 +50,6 @@ fit_height = 360
 learning_rate = 0.0005
 weight_decay = 0.000001
 gradient_clip_norm = 1.0
-renderer_replay_iou_min = 0.95
+renderer_replay_iou_min = 0.85
 translation_max_m = 0.20
 rotation_max_deg = 20.0
