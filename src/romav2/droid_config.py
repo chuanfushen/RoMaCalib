@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -36,4 +37,6 @@ def load_config(path: str | Path | None = None) -> tuple[dict, Path]:
             for key in keys[:-1]:
                 target = target[key]
             target[keys[-1]] = value
+    if value := os.environ.get("DROID_CALIBALL_COMMAND"):
+        config["paths"]["caliball_command"] = shlex.split(value)
     return config, config_path
