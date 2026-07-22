@@ -430,7 +430,17 @@ def validation_score(
     for index in indices:
         target_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
         if not target_path.is_file():
-            raise FileNotFoundError(f"Generate validation masks first: {target_path}")
+            rows.append(
+                {
+                    "frame_index": index,
+                    "status": "failure",
+                    "failure_reason": "sam3_no_mask",
+                    "metrics": {"iou": 0.0},
+                    "render_mask": None,
+                    "camera_npz": None,
+                }
+            )
+            continue
         target = np.asarray(Image.open(target_path).convert("L")) > 0
         set_droid_state(model, data, joints[index], gripper[index])
         frame_output = destination / "validation" / f"{index:06d}"
@@ -447,6 +457,7 @@ def validation_score(
         rows.append(
             {
                 "frame_index": index,
+                "status": "success",
                 "metrics": metrics,
                 "render_mask": str(mask_path),
                 "camera_npz": str(camera_path),
@@ -454,6 +465,8 @@ def validation_score(
         )
     return {
         "frame_count": len(rows),
+        "successful_frames": sum(row["status"] == "success" for row in rows),
+        "failed_frames": sum(row["status"] != "success" for row in rows),
         "iou_macro": float(np.mean([row["metrics"]["iou"] for row in rows])) if rows else 0.0,
         "rows": rows,
     }
@@ -567,10 +580,26 @@ def stage_roma(
             current_pose = load_pose(parent_path)
         model, data = make_droid_model(config, session)
         correspondences = []
+        skipped_fit_frames = []
         with h5py.File(session.episode.trajectory_h5, "r") as handle:
             joints = np.asarray(handle["observation/robot_state/joint_positions"])
             gripper = np.asarray(handle["observation/robot_state/gripper_position"])
             for index in indices:
+                mask_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
+                if not mask_path.is_file():
+                    skipped_fit_frames.append(index)
+                    match_dir = iteration_dir / "matches" / f"{index:06d}"
+                    write_json(
+                        match_dir / "summary.json",
+                        {
+                            "frame_index": index,
+                            "iteration": iteration,
+                            "status": "skipped",
+                            "failure_reason": "sam3_no_mask",
+                            "correspondence_count": 0,
+                        },
+                    )
+                    continue
                 set_droid_state(model, data, joints[index], gripper[index])
                 record = roma_correspondences_for_frame(
                     config,
@@ -643,6 +672,8 @@ def stage_roma(
                 "fallback_used": status != "success",
                 "failure_reason": failure_reason,
                 "fit_frame_indices": list(indices),
+                "usable_fit_frame_count": len(indices) - len(skipped_fit_frames),
+                "skipped_fit_frame_indices": skipped_fit_frames,
                 "pnp": pnp,
                 "validation": score,
                 "world_to_camera": pose["world_to_camera"].tolist(),
