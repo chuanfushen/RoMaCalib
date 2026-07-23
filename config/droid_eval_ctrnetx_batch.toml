@@ -1,0 +1,59 @@
+[paths]
+data_root = "data/droid"
+mujoco_xml = "assets/third_party/droid_franka_robotiq85/droid_panda_2f85.xml"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+output_root = "outputs/droid_ctrnetx_batch_10ep_20260723"
+mask_root = "outputs/droid_ctrnetx_batch_10ep_20260723_masks"
+caliball_command = ["conda", "run", "-n", "caliball", "python"]
+
+[data]
+selection_seed = 20260722
+cameras = ["ext1", "ext2"]
+batch_frame_set = "all"
+tuning_episode_count = 10
+# These legacy fields are retained only for the audit command. They are not
+# used by the CtRNet-X all-frame batch protocol.
+fit_frames = 0
+validation_frames = 0
+heldout_modulus = 1000000
+heldout_remainder = 999999
+
+[render]
+width = 1280
+height = 720
+visual_geom_group = 2
+views = 6
+distance_scale = 1.8
+min_distance = 0.5
+elevation = -15.0
+azimuth_offset = 0.0
+
+[matching]
+device = "cuda"
+mask_prompt = "robotic arm"
+max_keypoints = 2048
+score_filter = 0.0
+topk_per_frame = 64
+ransac_threshold_px = 8.0
+pnp_threshold_px = 5.0
+pnp_iterations = 10000
+pnp_confidence = 0.999
+seed = 90
+
+[refinement]
+iterations = 3
+selection = "fixed_iteration"
+validation_best = false
+
+[caliball]
+enabled = true
+implementation = "integration_v0"
+candidate_steps = [200, 500, 1000]
+fit_width = 640
+fit_height = 360
+learning_rate = 0.0005
+weight_decay = 0.000001
+gradient_clip_norm = 1.0
+renderer_replay_iou_min = 0.85
+translation_max_m = 0.20
+rotation_max_deg = 20.0

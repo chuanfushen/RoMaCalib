@@ -24,6 +24,7 @@ import cv2
 import h5py
 import mujoco
 import numpy as np
+import torch
 from PIL import Image
 
 from romav2.benchmarks.droid import (
@@ -73,7 +74,11 @@ def parse_args() -> argparse.Namespace:
         required=True,
     )
     parser.add_argument("--scope", choices=("tuning", "full"), default="tuning")
-    parser.add_argument("--split", choices=("fit", "validation", "heldout", "all-calibration"), default="validation")
+    parser.add_argument(
+        "--split",
+        choices=("fit", "validation", "heldout", "all-calibration", "all"),
+        default="all",
+    )
     parser.add_argument("--session", default=None, help="Optional exact session id.")
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--iteration", type=int, default=0)
@@ -143,6 +148,8 @@ def select_sessions(config: dict, sessions: list[DroidSession], args: argparse.N
 
 def frame_indices(config: dict, session: DroidSession, split_name: str) -> tuple[int, ...]:
     video_frames = video_record(session.video_path)["frame_count"]
+    if split_name == "all":
+        return tuple(range(video_frames))
     split = make_frame_split(
         video_frames,
         fit_count=int(config["data"]["fit_frames"]),
@@ -153,6 +160,20 @@ def frame_indices(config: dict, session: DroidSession, split_name: str) -> tuple
     if split_name == "all-calibration":
         return tuple(sorted((*split.fit, *split.validation)))
     return getattr(split, split_name)
+
+
+def batch_frame_set(config: dict) -> str:
+    """Return the frame set used by one session-level batch solve."""
+    return str(config["data"].get("batch_frame_set", "fit"))
+
+
+def set_match_seed(match_seed: int, frame_index: int, iteration: int) -> int:
+    """Mirror the CtRNet-X per-frame, per-iteration matching seed."""
+    seed = (int(match_seed) + int(frame_index) * 1009 + int(iteration)) % (2**31 - 1)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    cv2.setRNGSeed(seed)
+    return seed
 
 
 def read_video_frames(path: Path, indices: tuple[int, ...]) -> dict[int, np.ndarray]:
@@ -475,7 +496,10 @@ def validation_score(
 def masked_observed(mask_root: Path, session: DroidSession, index: int) -> np.ndarray:
     destination = frame_dir(mask_root, session, index)
     image = np.asarray(Image.open(destination / "real.png").convert("RGB"))
-    mask = np.asarray(Image.open(destination / "sam3_mask.png").convert("L")) > 0
+    mask_path = destination / "sam3_mask.png"
+    if not mask_path.is_file():
+        return image
+    mask = np.asarray(Image.open(mask_path).convert("L")) > 0
     observed = image.copy()
     observed[~mask] = 0
     return observed
@@ -506,6 +530,7 @@ def roma_correspondences_for_frame(
                 "image_points": np.asarray(cached["image_points"], dtype=np.float32),
                 "world_points": np.asarray(cached["world_points"], dtype=np.float32),
                 "scores": np.asarray(cached["scores"], dtype=np.float32),
+                "source_eligible": bool(cached["source_eligible"]),
             }
     if current_pose is None:
         render_paths = render_orbit_views(model, data, args, session.camera_matrix, destination / "renders")
@@ -520,6 +545,12 @@ def roma_correspondences_for_frame(
             stem="projected",
         )
         render_paths = [render_path]
+    match_args = SimpleNamespace(**vars(args))
+    if current_pose is not None:
+        # CtRNet-X batch refinement consumes post-geometry correspondences
+        # without requiring a frame-level PnP solution.
+        match_args.min_pnp_correspondences = 1_000_000_000
+    match_seed = set_match_seed(int(config["matching"]["seed"]), index, iteration)
     candidates = [
         match_one_render(
             observed,
@@ -528,7 +559,7 @@ def roma_correspondences_for_frame(
             model,
             data,
             session.camera_matrix,
-            args,
+            match_args,
             destination,
             artifact_stem=f"view_{ordinal:02d}",
         )
@@ -540,6 +571,10 @@ def roma_correspondences_for_frame(
         "image_points": np.asarray(best["_image_points"], dtype=np.float32),
         "world_points": np.asarray(best["_world_points"], dtype=np.float32),
         "scores": np.asarray(best["_scores"], dtype=np.float32),
+        # The audited CtRNet-X i0 replay uses only frames whose six-view
+        # single-frame search found a valid PnP. Closed-loop i1+ consumes every
+        # non-empty post-geometry correspondence set without frame-level PnP.
+        "source_eligible": current_pose is not None or best["pnp"]["status"] == "success",
     }
     np.savez_compressed(correspondence_path, **record)
     write_json(
@@ -547,7 +582,9 @@ def roma_correspondences_for_frame(
         {
             "frame_index": index,
             "iteration": iteration,
+            "match_seed": match_seed,
             "candidate_count": len(candidates),
+            "source_eligible": record["source_eligible"],
             "selected": {key: value for key, value in best.items() if not key.startswith("_")},
             "correspondence_count": len(record["scores"]),
         },
@@ -568,7 +605,8 @@ def stage_roma(
     args = matcher_args(config)
     matcher = ImcuiMatcher(args)
     for session_ordinal, session in enumerate(sessions):
-        indices = frame_indices(config, session, "fit")
+        frame_set = batch_frame_set(config)
+        indices = frame_indices(config, session, frame_set)
         if max_frames is not None:
             indices = indices[:max_frames]
         iteration_dir = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}"
@@ -577,29 +615,33 @@ def stage_roma(
             parent_path = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration - 1:02d}" / "selected_pose.npz"
             if not parent_path.is_file():
                 parent_path = parent_path.with_name("roma_pose.npz")
+            if not parent_path.is_file():
+                write_json(
+                    iteration_dir / "roma_summary.json",
+                    {
+                        "session_id": session.session_id,
+                        "iteration": iteration,
+                        "status": "skipped_no_parent",
+                        "fallback_used": False,
+                        "failure_reason": f"Missing preceding fixed pose: {parent_path}",
+                        "batch_frame_set": frame_set,
+                        "source_frame_indices": [],
+                        "usable_source_frame_count": 0,
+                        "skipped_source_frame_indices": list(indices),
+                        "pnp": None,
+                        "validation": None,
+                        "world_to_camera": None,
+                    },
+                )
+                continue
             current_pose = load_pose(parent_path)
         model, data = make_droid_model(config, session)
         correspondences = []
-        skipped_fit_frames = []
+        skipped_source_frames = []
         with h5py.File(session.episode.trajectory_h5, "r") as handle:
             joints = np.asarray(handle["observation/robot_state/joint_positions"])
             gripper = np.asarray(handle["observation/robot_state/gripper_position"])
             for index in indices:
-                mask_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
-                if not mask_path.is_file():
-                    skipped_fit_frames.append(index)
-                    match_dir = iteration_dir / "matches" / f"{index:06d}"
-                    write_json(
-                        match_dir / "summary.json",
-                        {
-                            "frame_index": index,
-                            "iteration": iteration,
-                            "status": "skipped",
-                            "failure_reason": "sam3_no_mask",
-                            "correspondence_count": 0,
-                        },
-                    )
-                    continue
                 set_droid_state(model, data, joints[index], gripper[index])
                 record = roma_correspondences_for_frame(
                     config,
@@ -614,8 +656,10 @@ def stage_roma(
                     data,
                     args,
                 )
-                if len(record["scores"]):
+                if len(record["scores"]) and record["source_eligible"]:
                     correspondences.append(record)
+                else:
+                    skipped_source_frames.append(index)
             try:
                 pose, pnp = solve_shared_pose(
                     correspondences,
@@ -624,59 +668,59 @@ def stage_roma(
                     reprojection_error_px=float(config["matching"]["pnp_threshold_px"]),
                     iterations=int(config["matching"]["pnp_iterations"]),
                     confidence=float(config["matching"]["pnp_confidence"]),
-                    seed=int(config["matching"]["seed"]) + session_ordinal * 1009 + iteration,
+                    seed=int(config["matching"]["seed"]) + session_ordinal * 10 + iteration,
                 )
                 status = "success"
                 failure_reason = None
             except RuntimeError as error:
                 failure_reason = f"{type(error).__name__}: {error}"
-                if current_pose is not None:
-                    pose = current_pose
-                    status = "fallback_parent"
-                else:
-                    world_to_camera = np.asarray(session.raw_world_to_camera, dtype=np.float64)
-                    pose = {
-                        "world_to_camera": world_to_camera,
-                        "camera_to_world": np.linalg.inv(world_to_camera),
-                        "camera_matrix": session.camera_matrix,
-                    }
-                    status = "fallback_raw_calibration"
+                pose = None
+                status = "failed"
                 pnp = {
                     "success": False,
                     "failure_reason": failure_reason,
                     "source_frame_count": len(correspondences),
-                    "fallback": status,
                 }
-            score = validation_score(
-                config,
-                session,
-                output_root,
-                mask_root,
-                pose,
-                iteration_dir / "roma_candidate",
-                model,
-                data,
-                joints,
-                gripper,
-                max_frames,
-            )
-        save_pose(iteration_dir / "roma_pose.npz", pose)
-        if iteration == 0:
-            save_pose(iteration_dir / "selected_pose.npz", pose)
+            selection = str(config["refinement"].get("selection", "validation_best"))
+            if pose is None or selection == "fixed_iteration":
+                score = None
+            elif selection == "validation_best":
+                score = validation_score(
+                    config,
+                    session,
+                    output_root,
+                    mask_root,
+                    pose,
+                    iteration_dir / "roma_candidate",
+                    model,
+                    data,
+                    joints,
+                    gripper,
+                    max_frames,
+                )
+            else:
+                raise ValueError(f"Unknown refinement.selection: {selection}")
+        if pose is not None:
+            save_pose(iteration_dir / "roma_pose.npz", pose)
+            if iteration == 0 or selection == "fixed_iteration":
+                save_pose(iteration_dir / "selected_pose.npz", pose)
         write_json(
             iteration_dir / "roma_summary.json",
             {
                 "session_id": session.session_id,
                 "iteration": iteration,
                 "status": status,
-                "fallback_used": status != "success",
+                "fallback_used": False,
                 "failure_reason": failure_reason,
-                "fit_frame_indices": list(indices),
-                "usable_fit_frame_count": len(indices) - len(skipped_fit_frames),
-                "skipped_fit_frame_indices": skipped_fit_frames,
+                "batch_frame_set": frame_set,
+                "source_frame_indices": list(indices),
+                "usable_source_frame_count": len(indices) - len(skipped_source_frames),
+                "skipped_source_frame_indices": skipped_source_frames,
                 "pnp": pnp,
                 "validation": score,
-                "world_to_camera": pose["world_to_camera"].tolist(),
+                "world_to_camera": (
+                    pose["world_to_camera"].tolist() if pose is not None else None
+                ),
             },
         )
 
@@ -687,6 +731,8 @@ def stage_select_roma(
     output_root: Path,
     iteration: int,
 ) -> None:
+    if str(config["refinement"].get("selection", "validation_best")) != "validation_best":
+        raise ValueError("select-roma is disabled for fixed-iteration batch experiments")
     if not 1 <= iteration <= int(config["refinement"]["iterations"]):
         raise ValueError("select-roma requires an iteration in [1, refinement.iterations]")
     for session in sessions:
@@ -851,7 +897,7 @@ def prepare_caliball_bundle(
     geom_ids = [index for index in range(model.ngeom) if int(model.geom_group[index]) == geom_group]
     if not geom_ids:
         raise RuntimeError("No DROID visual geoms for CalibAll")
-    indices = frame_indices(config, session, "fit")
+    indices = frame_indices(config, session, batch_frame_set(config))
     if max_frames is not None:
         indices = indices[:max_frames]
     iteration_dir = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}"
