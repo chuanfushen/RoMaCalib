@@ -49,6 +49,9 @@ validation_best = false
 enabled = true
 implementation = "integration_v0"
 candidate_steps = [200, 500, 1000]
+# A deterministic, evenly spaced subset of each full session is used to keep
+# differentiable rendering bounded. This is a support set, not a train/val split.
+support_frames = 8
 fit_width = 640
 fit_height = 360
 learning_rate = 0.0005

@@ -6,6 +6,7 @@ from PIL import Image
 
 from scripts.run_droid_eval import (
     batch_frame_set,
+    caliball_support_indices,
     ctrnetx_batch_pnp_seed,
     ctrnetx_frame_correspondences,
     frame_indices,
@@ -23,6 +24,18 @@ def test_ctrnetx_batch_protocol_uses_every_video_frame(monkeypatch) -> None:
 
     assert batch_frame_set(config) == "all"
     assert frame_indices(config, session, "all") == tuple(range(7))
+
+
+def test_caliball_support_frames_are_evenly_spaced_over_valid_full_sequence(tmp_path) -> None:
+    session = SimpleNamespace(session_id="episode__ext1")
+    for index in (0, 2, 4, 6, 8):
+        destination = tmp_path / "sessions" / session.session_id / "frames" / f"{index:06d}"
+        destination.mkdir(parents=True)
+        Image.new("L", (2, 2), 255).save(destination / "sam3_mask.png")
+
+    selected = caliball_support_indices(tuple(range(9)), tmp_path, session, 3)
+
+    assert selected == (0, 4, 8)
 
 
 def test_batch_matching_falls_back_to_unmasked_frame(tmp_path) -> None:

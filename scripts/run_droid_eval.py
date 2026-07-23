@@ -31,6 +31,7 @@ from romav2.benchmarks.droid import (
     DroidSession,
     binary_mask_metrics,
     build_sessions,
+    evenly_spaced,
     make_frame_split,
     select_best_iteration,
     sha256_file,
@@ -911,6 +912,20 @@ def pose_delta(initial: np.ndarray, refined: np.ndarray) -> dict[str, float]:
     return {"translation_m": translation, "rotation_deg": float(np.degrees(np.arccos(cosine)))}
 
 
+def caliball_support_indices(
+    candidates: tuple[int, ...],
+    mask_root: Path,
+    session: DroidSession,
+    requested_count: int,
+) -> tuple[int, ...]:
+    valid_indices = tuple(
+        index
+        for index in candidates
+        if (frame_dir(mask_root, session, index) / "sam3_mask.png").is_file()
+    )
+    return evenly_spaced(valid_indices, min(requested_count, len(valid_indices)))
+
+
 def prepare_caliball_bundle(
     config: dict,
     session: DroidSession,
@@ -937,8 +952,14 @@ def prepare_caliball_bundle(
     if not geom_ids:
         raise RuntimeError("No DROID visual geoms for CalibAll")
     indices = frame_indices(config, session, batch_frame_set(config))
-    if max_frames is not None:
-        indices = indices[:max_frames]
+    requested_count = (
+        int(max_frames)
+        if max_frames is not None
+        else int(caliball.get("support_frames", len(indices)))
+    )
+    indices = caliball_support_indices(indices, mask_root, session, requested_count)
+    if not indices:
+        raise RuntimeError(f"No valid SAM reference masks for CalibAll: {session.session_id}")
     iteration_dir = output_root / "sessions" / session.session_id / "poses" / f"iteration_{iteration:02d}"
     initial_pose = load_pose(iteration_dir / "roma_pose.npz")
     render_args = SimpleNamespace(width=width, height=height, visual_geom_group=geom_group)
@@ -1050,37 +1071,44 @@ def stage_caliball(
             }
             roma_pose = load_pose(roma_path)
             refined_delta = pose_delta(roma_pose["world_to_camera"], refined_pose["world_to_camera"])
-            refined_validation = validation_score(
-                config,
-                session,
-                output_root,
-                mask_root,
-                refined_pose,
-                destination / "refined_candidate",
-                model,
-                data,
-                joints,
-                gripper,
-                max_frames,
-            )
             roma_summary = json.loads((iteration_dir / "roma_summary.json").read_text(encoding="utf-8"))
+            fixed_batch = str(config["refinement"].get("selection")) == "fixed_iteration"
+            if fixed_batch:
+                roma_score = float(fit_summary["initial_fit_iou_macro"])
+                refined_score = float(fit_summary["refined_fit_iou_macro"])
+            else:
+                refined_validation = validation_score(
+                    config,
+                    session,
+                    output_root,
+                    mask_root,
+                    refined_pose,
+                    destination / "refined_candidate",
+                    model,
+                    data,
+                    joints,
+                    gripper,
+                    max_frames,
+                )
+                roma_score = float(roma_summary["validation"]["iou_macro"])
+                refined_score = float(refined_validation["iou_macro"])
             candidates = [
                 {
                     "name": "roma",
                     "iteration": iteration,
-                    "validation_iou": float(roma_summary["validation"]["iou_macro"]),
+                    "validation_iou": roma_score,
                     "pose_delta": {"translation_m": 0.0, "rotation_deg": 0.0},
                     "pose": roma_pose,
                 },
                 {
                     "name": "caliball",
                     "iteration": iteration,
-                    "validation_iou": float(refined_validation["iou_macro"]),
+                    "validation_iou": refined_score,
                     "pose_delta": refined_delta,
                     "pose": refined_pose,
                 },
             ]
-            if iteration > 0:
+            if iteration > 0 and not fixed_batch:
                 parent_iteration_dir = (
                     output_root
                     / "sessions"
@@ -1146,6 +1174,11 @@ def stage_caliball(
                 "session_id": session.session_id,
                 "iteration": iteration,
                 "steps": steps,
+                "selection_score": (
+                    "caliball_support_frame_iou"
+                    if fixed_batch
+                    else "validation_frame_iou"
+                ),
                 "numerically_valid": numerically_valid,
                 "within_trust_region": within_trust_region,
                 "renderer_replay_iou": renderer_replay_iou,
@@ -1233,33 +1266,45 @@ def stage_raw_eval(
             for index in indices:
                 destination = frame_dir(output_root, session, index)
                 mask_path = frame_dir(mask_root, session, index) / "sam3_mask.png"
-                if not mask_path.is_file():
-                    raise FileNotFoundError(f"Generate {split_name} masks first: {mask_path}")
-                target = np.asarray(Image.open(mask_path).convert("L")) > 0
-                set_droid_state(model, data, joints[index], gripper[index])
-                rendered_path, camera_path, rendered = render_pose_mask(
-                    model,
-                    data,
-                    args,
-                    session.camera_matrix,
-                    session.raw_world_to_camera,
-                    destination,
-                    stem="droid_raw_calibration",
-                )
-                metrics = binary_mask_metrics(rendered, target)
-                record = {
-                    "session_id": session.session_id,
-                    "episode_rank": session.episode.rank,
-                    "episode_uuid": session.episode.uuid,
-                    "camera_name": session.camera_name,
-                    "frame_index": index,
-                    "split": split_name,
-                    "status": "success",
-                    "system": "DROID-raw-calib",
-                    "metrics": metrics,
-                    "render_mask": str(rendered_path),
-                    "camera_npz": str(camera_path),
-                }
+                try:
+                    target = np.asarray(Image.open(mask_path).convert("L")) > 0
+                    set_droid_state(model, data, joints[index], gripper[index])
+                    rendered_path, camera_path, rendered = render_pose_mask(
+                        model,
+                        data,
+                        args,
+                        session.camera_matrix,
+                        session.raw_world_to_camera,
+                        destination,
+                        stem="droid_raw_calibration",
+                    )
+                    metrics = binary_mask_metrics(rendered, target)
+                    record = {
+                        "session_id": session.session_id,
+                        "episode_rank": session.episode.rank,
+                        "episode_uuid": session.episode.uuid,
+                        "camera_name": session.camera_name,
+                        "frame_index": index,
+                        "split": split_name,
+                        "status": "success",
+                        "system": "DROID-raw-calib",
+                        "metrics": metrics,
+                        "render_mask": str(rendered_path),
+                        "camera_npz": str(camera_path),
+                    }
+                except Exception as error:
+                    record = {
+                        "session_id": session.session_id,
+                        "episode_rank": session.episode.rank,
+                        "episode_uuid": session.episode.uuid,
+                        "camera_name": session.camera_name,
+                        "frame_index": index,
+                        "split": split_name,
+                        "status": "failure",
+                        "failure_reason": f"{type(error).__name__}: {error}",
+                        "system": "DROID-raw-calib",
+                        "metrics": {"iou": 0.0},
+                    }
                 write_json(destination / "raw_eval.json", record)
                 all_records.append(record)
     write_json(
