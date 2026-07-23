@@ -11,7 +11,7 @@ def record(episode: str, frame: int, iou: float) -> dict:
         "frame_index": frame,
         "status": "success",
         "metrics": {"iou": iou},
-        "official_iou_320x180": iou,
+        "native_iou_1280x720": iou,
     }
 
 
@@ -21,7 +21,7 @@ def test_summary_reports_frame_session_and_episode_macros() -> None:
         {
             **record("episode1", 1, 0.0),
             "status": "failure",
-            "official_iou_320x180": None,
+            "native_iou_1280x720": None,
         }
     )
 
@@ -30,9 +30,9 @@ def test_summary_reports_frame_session_and_episode_macros() -> None:
     assert result["requested_frames"] == 4
     assert result["evaluable_frames"] == 3
     assert result["missing_or_failed_frames"] == 1
-    assert result["official_320x180_frame_iou_macro"] == pytest.approx(0.7)
-    assert result["official_320x180_session_iou_macro"] == pytest.approx(0.75)
-    assert result["official_320x180_episode_iou_macro"] == pytest.approx(0.75)
+    assert result["native_1280x720_frame_iou_macro"] == pytest.approx(0.7)
+    assert result["native_1280x720_session_iou_macro"] == pytest.approx(0.75)
+    assert result["native_1280x720_episode_iou_macro"] == pytest.approx(0.75)
 
 
 def test_visual_selection_uses_one_best_frame_per_episode() -> None:

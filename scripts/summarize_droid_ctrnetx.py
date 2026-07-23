@@ -13,7 +13,6 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
-OFFICIAL_SIZE = (320, 180)
 RAW_COLOR = np.asarray([238, 133, 54], dtype=np.float32)
 OURS_COLOR = np.asarray([67, 126, 191], dtype=np.float32)
 
@@ -43,9 +42,8 @@ def reference_path(mask_root: Path, record: dict[str, Any], name: str) -> Path:
     )
 
 
-def resized_mask(path: Path) -> np.ndarray:
-    image = Image.open(path).convert("L").resize(OFFICIAL_SIZE, Image.Resampling.NEAREST)
-    return np.asarray(image) > 0
+def native_mask(path: Path) -> np.ndarray:
+    return np.asarray(Image.open(path).convert("L")) > 0
 
 
 def mask_iou(prediction: np.ndarray, target: np.ndarray) -> float:
@@ -61,19 +59,19 @@ def score_records(summary: dict[str, Any], mask_root: Path) -> list[dict[str, An
         target_path = reference_path(mask_root, row, "sam3_mask.png")
         render_path = Path(str(row.get("render_mask", "")))
         if row.get("status") != "success" or not target_path.is_file() or not render_path.is_file():
-            row["official_iou_320x180"] = None
+            row["native_iou_1280x720"] = None
             scored.append(row)
             continue
-        row["official_iou_320x180"] = mask_iou(
-            resized_mask(render_path),
-            resized_mask(target_path),
+        row["native_iou_1280x720"] = mask_iou(
+            native_mask(render_path),
+            native_mask(target_path),
         )
         scored.append(row)
     return scored
 
 
 def summarize(name: str, records: list[dict[str, Any]]) -> dict[str, Any]:
-    evaluable = [row for row in records if row["official_iou_320x180"] is not None]
+    evaluable = [row for row in records if row["native_iou_1280x720"] is not None]
     native = [
         float(row["metrics"]["iou"])
         for row in records
@@ -85,7 +83,7 @@ def summarize(name: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         float(
             np.mean(
                 [
-                    row["official_iou_320x180"]
+                    row["native_iou_1280x720"]
                     for row in evaluable
                     if str(row["session_id"]) == session_id
                 ]
@@ -97,7 +95,7 @@ def summarize(name: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         float(
             np.mean(
                 [
-                    row["official_iou_320x180"]
+                    row["native_iou_1280x720"]
                     for row in evaluable
                     if str(row["episode_uuid"]) == episode_uuid
                 ]
@@ -111,11 +109,11 @@ def summarize(name: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         "evaluable_frames": len(evaluable),
         "missing_or_failed_frames": len(records) - len(evaluable),
         "native_frame_iou_macro": float(np.mean(native)) if native else None,
-        "official_320x180_frame_iou_macro": float(
-            np.mean([row["official_iou_320x180"] for row in evaluable])
+        "native_1280x720_frame_iou_macro": float(
+            np.mean([row["native_iou_1280x720"] for row in evaluable])
         ),
-        "official_320x180_session_iou_macro": float(np.mean(session_means)),
-        "official_320x180_episode_iou_macro": float(np.mean(episode_means)),
+        "native_1280x720_session_iou_macro": float(np.mean(session_means)),
+        "native_1280x720_episode_iou_macro": float(np.mean(episode_means)),
     }
 
 
@@ -133,12 +131,12 @@ def choose_visuals(
     raw_by_frame = {
         (str(row["session_id"]), int(row["frame_index"])): row
         for row in raw_records
-        if row["official_iou_320x180"] is not None
+        if row["native_iou_1280x720"] is not None
     }
     pairs = [
         (raw_by_frame[(str(row["session_id"]), int(row["frame_index"]))], row)
         for row in final_records
-        if row["official_iou_320x180"] is not None
+        if row["native_iou_1280x720"] is not None
         and (str(row["session_id"]), int(row["frame_index"])) in raw_by_frame
     ]
     episode_best = []
@@ -148,15 +146,15 @@ def choose_visuals(
             max(
                 candidates,
                 key=lambda pair: (
-                    float(pair[1]["official_iou_320x180"]),
-                    float(pair[1]["official_iou_320x180"])
-                    - float(pair[0]["official_iou_320x180"]),
+                    float(pair[1]["native_iou_1280x720"]),
+                    float(pair[1]["native_iou_1280x720"])
+                    - float(pair[0]["native_iou_1280x720"]),
                 ),
             )
         )
     return sorted(
         episode_best,
-        key=lambda pair: float(pair[1]["official_iou_320x180"]),
+        key=lambda pair: float(pair[1]["native_iou_1280x720"]),
         reverse=True,
     )[:count]
 
@@ -197,8 +195,8 @@ def make_figure(
                 "episode_uuid": final["episode_uuid"],
                 "session_id": final["session_id"],
                 "frame_index": int(final["frame_index"]),
-                "raw_iou_320x180": float(raw["official_iou_320x180"]),
-                "final_iou_320x180": float(final["official_iou_320x180"]),
+                "raw_iou_1280x720": float(raw["native_iou_1280x720"]),
+                "final_iou_1280x720": float(final["native_iou_1280x720"]),
             }
         )
     for row, label in enumerate(labels):
@@ -216,7 +214,7 @@ def write_table(rows: list[dict[str, Any]], output_dir: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     latex_rows = "\n".join(
-        f"{row['method']} & {row['official_320x180_frame_iou_macro']:.4f} \\\\"
+        f"{row['method']} & {row['native_1280x720_frame_iou_macro']:.4f} \\\\"
         for row in rows
     )
     (output_dir / "droid_iou_table.tex").write_text(
@@ -240,7 +238,7 @@ def main() -> None:
     (args.output_dir / "droid_final_summary.json").write_text(
         json.dumps(
             {
-                "metric": "frame-wise mask IoU after nearest-neighbor resize to 320x180",
+                "metric": "frame-wise mask IoU at the native 1280x720 resolution",
                 "table": table,
                 "visual_selection": "best final-IoU frame per episode, then top episodes",
                 "visuals": manifest,
