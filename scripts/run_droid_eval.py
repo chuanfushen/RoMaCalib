@@ -176,6 +176,33 @@ def set_match_seed(match_seed: int, frame_index: int, iteration: int) -> int:
     return seed
 
 
+def ctrnetx_batch_pnp_seed(base_seed: int, global_session_ordinal: int, iteration: int) -> int:
+    """Mirror the CtRNet-X replay and closed-loop batch PnP seeds."""
+    ordinal = (
+        int(global_session_ordinal)
+        if int(iteration) == 0
+        else int(global_session_ordinal) * 10 + int(iteration)
+    )
+    return (int(base_seed) + ordinal * 1009) % (2**31 - 1)
+
+
+def ctrnetx_frame_correspondences(
+    best: dict[str, Any],
+    *,
+    refinement: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+    """Select the correspondence source used by the audited CtRNet-X batch scripts."""
+    pnp_success = best["pnp"]["status"] == "success"
+    source = best if refinement or not pnp_success else best["_pose"]
+    prefix = "_" if source is best else ""
+    return (
+        np.asarray(source[f"{prefix}image_points"], dtype=np.float32),
+        np.asarray(source[f"{prefix}world_points"], dtype=np.float32),
+        np.asarray(source[f"{prefix}scores"], dtype=np.float32),
+        bool(refinement or pnp_success),
+    )
+
+
 def read_video_frames(path: Path, indices: tuple[int, ...]) -> dict[int, np.ndarray]:
     requested = set(indices)
     frames: dict[int, np.ndarray] = {}
@@ -566,15 +593,20 @@ def roma_correspondences_for_frame(
         for ordinal, render_path in enumerate(render_paths)
     ]
     best = max(candidates, key=best_view_key)
+    image_points, world_points, scores, source_eligible = ctrnetx_frame_correspondences(
+        best,
+        refinement=current_pose is not None,
+    )
     record = {
         "frame_index": index,
-        "image_points": np.asarray(best["_image_points"], dtype=np.float32),
-        "world_points": np.asarray(best["_world_points"], dtype=np.float32),
-        "scores": np.asarray(best["_scores"], dtype=np.float32),
+        "image_points": image_points,
+        "world_points": world_points,
+        "scores": scores,
         # The audited CtRNet-X i0 replay uses only frames whose six-view
-        # single-frame search found a valid PnP. Closed-loop i1+ consumes every
-        # non-empty post-geometry correspondence set without frame-level PnP.
-        "source_eligible": current_pose is not None or best["pnp"]["status"] == "success",
+        # single-frame search found a valid PnP and replays that pose's PnP
+        # input arrays. Closed-loop i1+ consumes every non-empty post-geometry
+        # correspondence set without frame-level PnP.
+        "source_eligible": source_eligible,
     }
     np.savez_compressed(correspondence_path, **record)
     write_json(
@@ -595,6 +627,7 @@ def roma_correspondences_for_frame(
 def stage_roma(
     config: dict,
     sessions: list[DroidSession],
+    session_ordinals: dict[str, int],
     output_root: Path,
     mask_root: Path,
     iteration: int,
@@ -604,7 +637,8 @@ def stage_roma(
         raise ValueError("iteration is outside configured range")
     args = matcher_args(config)
     matcher = ImcuiMatcher(args)
-    for session_ordinal, session in enumerate(sessions):
+    for session in sessions:
+        global_session_ordinal = session_ordinals[session.session_id]
         frame_set = batch_frame_set(config)
         indices = frame_indices(config, session, frame_set)
         if max_frames is not None:
@@ -668,7 +702,11 @@ def stage_roma(
                     reprojection_error_px=float(config["matching"]["pnp_threshold_px"]),
                     iterations=int(config["matching"]["pnp_iterations"]),
                     confidence=float(config["matching"]["pnp_confidence"]),
-                    seed=int(config["matching"]["seed"]) + session_ordinal * 10 + iteration,
+                    seed=ctrnetx_batch_pnp_seed(
+                        int(config["matching"]["seed"]),
+                        global_session_ordinal,
+                        iteration,
+                    ),
                 )
                 status = "success"
                 failure_reason = None
@@ -708,6 +746,7 @@ def stage_roma(
             iteration_dir / "roma_summary.json",
             {
                 "session_id": session.session_id,
+                "global_session_ordinal": global_session_ordinal,
                 "iteration": iteration,
                 "status": status,
                 "fallback_used": False,
@@ -1408,7 +1447,11 @@ def main() -> None:
     data_root = project_path(config["paths"]["data_root"])
     output_root = project_path(config["paths"]["output_root"])
     mask_root = project_path(config["paths"].get("mask_root", config["paths"]["output_root"]))
-    sessions = select_sessions(config, build_sessions(data_root), args)
+    all_sessions = build_sessions(data_root)
+    session_ordinals = {
+        session.session_id: ordinal for ordinal, session in enumerate(all_sessions)
+    }
+    sessions = select_sessions(config, all_sessions, args)
     print(f"config={config_path}")
     print(f"stage={args.stage} scope={args.scope} split={args.split} sessions={len(sessions)}")
     if args.dry_run:
@@ -1437,7 +1480,15 @@ def main() -> None:
     elif args.stage == "seed-t0":
         stage_seed_t0(sessions, output_root, args.source_output_root)
     elif args.stage == "roma":
-        stage_roma(config, sessions, output_root, mask_root, args.iteration, args.max_frames)
+        stage_roma(
+            config,
+            sessions,
+            session_ordinals,
+            output_root,
+            mask_root,
+            args.iteration,
+            args.max_frames,
+        )
     elif args.stage == "select-roma":
         stage_select_roma(config, sessions, output_root, args.iteration)
     elif args.stage == "caliball":

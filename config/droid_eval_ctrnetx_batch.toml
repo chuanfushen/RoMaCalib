@@ -2,7 +2,7 @@
 data_root = "data/droid"
 mujoco_xml = "assets/third_party/droid_franka_robotiq85/droid_panda_2f85.xml"
 sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
-output_root = "outputs/droid_ctrnetx_batch_10ep_20260723"
+output_root = "outputs/droid_ctrnetx_batch_exact_10ep_20260723"
 mask_root = "outputs/droid_ctrnetx_batch_10ep_20260723_masks"
 caliball_command = ["conda", "run", "-n", "caliball", "python"]
 
