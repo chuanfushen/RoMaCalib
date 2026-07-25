@@ -1,0 +1,51 @@
+# Full DREAM Panda Azure evaluation on server A.
+# Unique variable versus the frozen original protocol: views = 12.
+# Records the original Stage-1 estimate plus refinement iterations 1, 2, and 3.
+
+[robot]
+visual_geom_group = 2
+
+[paths]
+data_root = "data/dream"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/dream_panda_azure_views12_full_i3_sA_20260725_prerender"
+output_root = "outputs/dream_panda_azure_views12_full_i3_sA_20260725_match_eval"
+
+[datasets.real]
+enabled = true
+name = "panda-3cam_azure"
+path = "real/panda-3cam_azure"
+
+[camera]
+distortion_state = "rectified"
+
+[evaluation]
+datasets = ["real"]
+sample_count = 6394
+sample_seed = 90
+views = 12
+match_batch_size = 6
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = true
+save_visualizations = true
+save_all_matches = true
+
+[refinement]
+enabled = true
+iterations = 3
+save_artifacts = true
+process_width = 640
+process_height = 480
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 2.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0
