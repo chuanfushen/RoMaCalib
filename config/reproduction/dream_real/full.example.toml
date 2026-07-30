@@ -1,0 +1,70 @@
+# CF historical full DREAM-real scope.  The four keys below are public planning
+# aliases: each original CF stage-1 TOML used `datasets.dr`.  Refinement reuses
+# the matching Stage-1 output from `initial_results_root`; it never reruns that
+# six-view stage or SAM internally.
+
+[protocol]
+id = "dream_real_full_legacy"
+semantic_id = "legacy-unconditional-pnp-replace-v1"
+historical_reference = "CF full run; never substitute gate-v1 semantics"
+
+[paths]
+data_root = "data/dream"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/reproduction/prerender"
+initial_results_root = "outputs/reproduction/dream_real_stage1"
+output_root = "outputs/reproduction/dream_real_full"
+
+[robot]
+visual_geom_group = 2
+visual_body_names = []
+
+[datasets.azure]
+name = "panda-3cam_azure"
+path = "real/panda-3cam_azure"
+sample_count = 6394
+initial_results_name = "panda-3cam_azure_sample6394"
+
+[datasets.kinect360]
+name = "panda-3cam_kinect360"
+path = "real/panda-3cam_kinect360"
+sample_count = 4966
+initial_results_name = "panda-3cam_kinect360_sample4966"
+
+[datasets.orb]
+name = "panda-orb"
+path = "real/panda-orb"
+sample_count = 32315
+initial_results_name = "panda-orb_sample32315"
+
+[datasets.realsense]
+name = "panda-3cam_realsense"
+path = "real/panda-3cam_realsense"
+sample_count = 5944
+initial_results_name = "panda-3cam_realsense_sample5944"
+
+[evaluation]
+datasets = ["azure", "kinect360", "orb", "realsense"]
+sample_count = 49619 # fallback only; each dataset declares its archived count above
+sample_seed = 90
+match_seed = 90
+views = 6
+match_batch_size = 6
+refinement_iterations = 3
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = false
+save_visualizations = true
+save_all_matches = true
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 2.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0

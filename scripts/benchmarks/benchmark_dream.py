@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
+from calibx.configuration import load_config, project_path
+from calibx.dataset_adapters import Dream
 from romav2 import RoMaV2
-from romav2.benchmarks import Dream
-from romav2.dream_config import load_config, project_path
 
 logger = logging.getLogger(__name__)
 

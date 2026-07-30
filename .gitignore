@@ -1,9 +1,11 @@
 __pycache__/
 .vscode
 .venv
+dist/
 *.pt
 wandb/
-uv.lock
 outputs/
 assets/checkpoints/
 config/dream_eval.local.toml
+# Machine-specific reproduction configs (paths, checkpoints, and outputs).
+config/reproduction/**/*.local.toml

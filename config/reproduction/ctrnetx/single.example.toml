@@ -1,0 +1,66 @@
+# Template only: paths are CF-confirmed relative layout names.  The three keys
+# below are public planning aliases; each original CF stage-1 TOML used
+# `datasets.dr` for one split.
+
+[protocol]
+id = "ctrnetx_single_legacy"
+semantic_id = "legacy-unconditional-pnp-replace-v1"
+requested_frames = 17306
+robot_in_view_frames = 8128
+robot_in_and_out_frames = 9178
+
+[runtime_manifest]
+# Supply this separately as --runtime-frame-manifest.  It contains portable
+# split/frame IDs and opaque metadata only; a local hook resolves data paths.
+protocol = "ctrnetx_single_frame_runtime_frames"
+require_full_paper_scope = true
+
+[paths]
+data_root = "data/ctrnet-x"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/reproduction/prerender"
+output_root = "outputs/reproduction/ctrnetx_single"
+initial_results_root = "outputs/reproduction/ctrnetx_stage1"
+
+[robot]
+visual_geom_group = 2
+
+[datasets.robot_in_view_full_body]
+name = "panda_dataset_full_body_10eps"
+path = "panda_dataset_full_body_10eps"
+sample_count = 1864
+
+[datasets.robot_in_view_partial]
+name = "panda_dataset_partial_view_20_eps"
+path = "panda_dataset_partial_view_20_eps"
+sample_count = 6264
+
+[datasets.robot_in_and_out]
+name = "panda_dataset_in_out_30eps"
+path = "panda_dataset_in_out_30eps"
+sample_count = 9178
+
+[evaluation]
+datasets = ["robot_in_view_full_body", "robot_in_view_partial", "robot_in_and_out"]
+sample_count = 17306 # fallback only; each split declares its archived count above
+sample_seed = 90
+match_seed = 90
+views = 6
+match_batch_size = 6
+refinement_iterations = 3
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = false
+save_visualizations = true
+save_all_matches = true
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 2.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0

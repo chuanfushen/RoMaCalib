@@ -1,28 +1,29 @@
 [project]
-name = "romav2"
-version = "2.0.1"
-description = "RoMa v2: Harder Better Faster Denser Feature Matching"
+name = "calibx"
+version = "0.1.0"
+description = "Training-free camera-to-robot pose estimation with dense feature matching"
 readme = "README.md"
-authors = [
-    { name = "Johan Edstedt", email = "johan.edstedt@liu.se" }
-]
 requires-python = ">=3.10"
 dependencies = [
     "einops>=0.8.1",
+    "mujoco>=3.10.0",
+    "numpy>=1.26,<2",
     "pillow>=12.0.0",
+    "psutil>=7.2.2",
+    "pycocotools>=2.0.11",
     "rich>=14.2.0",
+    "sam3",
     "torch",
     "torchvision>=0.23.0",
     "tqdm>=4.67.1",
     "fused-local-corr ; sys_platform == 'linux'",
-    "mujoco>=3.10.0",
-    "sam3",
-    "pycocotools>=2.0.11",
-    "psutil>=7.2.2",
 ]
 
+[project.scripts]
+calibx = "calibx.cli:main"
+
 [build-system]
-requires = ["uv_build>=0.8.15,<0.9.0"]
+requires = ["uv_build>=0.11.26,<0.12"]
 build-backend = "uv_build"
 
 [project.optional-dependencies]
@@ -47,6 +48,9 @@ setup = [
 torch = { index = "pytorch-cu129" }
 torchvision = { index = "pytorch-cu129" }
 sam3 = { git = "https://github.com/facebookresearch/sam3.git" }
+
+[tool.uv.build-backend]
+module-name = ["calibx", "romav2"]
 
 [[tool.uv.index]]
 name = "pytorch-cu129"

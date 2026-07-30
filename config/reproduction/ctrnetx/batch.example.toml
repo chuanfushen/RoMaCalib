@@ -1,0 +1,40 @@
+# Closed-loop batch is a distinct protocol, not a larger match batch size.
+
+[protocol]
+id = "ctrnetx_closed_loop_batch"
+requested_frames = 17306
+episodes = 60
+iterations = 3
+source_policy = "stage1_success_only_topk_per_frame"
+recovery_policy = "publish_every_recovery_event_and_preserve_all_requested_frames"
+
+[stage1]
+# Stage 0 obtains per-frame source correspondences from six orbit views.
+views = 6
+# CF's archived stage-1 evaluator processed the six candidate renders together.
+match_batch_size = 6
+
+[replay_render]
+# Each i1--i3 update is one pose-aligned render, never another six-view sweep.
+visual_geom_group = 2
+views = 1
+
+[episode_pnp]
+topk_per_frame = 64
+min_source_frames = 2
+min_pnp_correspondences = 6
+reprojection_threshold_px = 5.0
+iterations = 10000
+confidence = 0.999
+seed = 90
+
+[matching]
+mask_input = true
+mask_prompt = "robotic arm"
+# Every replay callback receives one pose-aligned render.  A cross-frame matcher
+# batch was not an archived protocol parameter, so it is deliberately omitted.
+
+[sharding]
+shard_count = 4
+strategy = "largest_first_min_load"
+historical_frame_counts = [4330, 4326, 4325, 4325]

@@ -1,0 +1,53 @@
+# ORB camera-subset template only.  It is not the four-camera DREAM-real full
+# protocol and must not be labelled as a full result.  Copy to an ignored
+# *.local.toml and set machine-local paths.
+
+[protocol]
+id = "dream_real_orb_subset_legacy"
+scope = "orb_camera_subset"
+semantic_id = "legacy-unconditional-pnp-replace-v1"
+historical_reference = "DREAM-real ORB camera subset; not a four-camera full run or gate-v1"
+
+[paths]
+data_root = "data/dream"
+sam3_dir = "assets/checkpoints/sam3"
+sam3_checkpoint = "assets/checkpoints/sam3/sam3.pt"
+mujoco_xml = "assets/third_party/mujoco_menagerie/franka_emika_panda/panda.xml"
+prerender_root = "outputs/reproduction/prerender"
+initial_results_root = "outputs/reproduction/dream_real_stage1"
+output_root = "outputs/reproduction/dream_real_orb_subset"
+
+[robot]
+visual_geom_group = 2
+visual_body_names = []
+
+[datasets.orb]
+enabled = true
+name = "panda-orb"
+path = "real/panda-orb"
+initial_results_name = "panda-orb_sample32315"
+
+[evaluation]
+# This template intentionally requests the ORB camera subset only.
+datasets = ["orb"]
+sample_count = 32315
+sample_seed = 90
+match_seed = 90
+views = 6
+match_batch_size = 6
+refinement_iterations = 3
+device = "cuda"
+mask_input = true
+mask_prompt = "robotic arm"
+resume = false
+save_visualizations = true
+save_all_matches = true
+
+[prerender]
+workers = 1
+width = 640
+height = 480
+distance_scale = 2.8
+min_distance = 1.2
+elevation = -20.0
+azimuth_offset = 0.0

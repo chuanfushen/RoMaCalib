@@ -1,0 +1,37 @@
+# Table 4 template.  One manifest is required for each split and shared by
+# mask_input=true and mask_input=false arms.
+
+[protocol]
+id = "sam_foreground_ablation_table4"
+robot_in_view_requested_frames = 900
+robot_in_and_out_requested_frames = 900
+views = 6
+refinement_iterations = 3
+# Stage 0 runs six orbital renders together.  R1--R3 call the matcher once per
+# pose-aligned render, which the historical d7 evaluator hard-coded as batch 1.
+stage1_match_batch_size = 6
+refinement_match_batch_size = 1
+# The d7 gate-v1 run fixed its global deterministic Torch/NumPy/OpenCV seed.
+# A local backend must apply this before its matching calls; it is not a
+# per-frame batch-replay seed schedule.
+determinism_seed = 20260717
+pairing = "identical_frame_manifest"
+
+[with_sam]
+mask_input = true
+mask_prompt = "robotic arm"
+
+[without_sam]
+mask_input = false
+mask_prompt = "robotic arm"
+
+# The actual public frame IDs are deliberately not committed until a clean run
+# creates them. Supply them through these repository-relative manifest paths or
+# override both locations on the validation command line.
+[manifests.robot_in_view]
+without_sam = "paper/manifests/table4_robot_in_view_without_sam.json"
+with_sam = "paper/manifests/table4_robot_in_view_with_sam.json"
+
+[manifests.robot_in_and_out]
+without_sam = "paper/manifests/table4_robot_in_and_out_without_sam.json"
+with_sam = "paper/manifests/table4_robot_in_and_out_with_sam.json"

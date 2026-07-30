@@ -1,0 +1,27 @@
+# Table 5 remains optional until its recovered formal outputs match the paper.
+
+[protocol]
+id = "matcher_ablation_candidate"
+requested_frames = 300
+sample_seed = 90
+views = 6
+refinement_iterations = 3
+gate_id = "gate-v1"
+mask_input = true
+shard_count = 2
+frames_per_shard = 150
+pairing = "identical_frame_manifest"
+status = "pending_paper_value_verification"
+
+[matchers]
+baseline = "romav2"
+candidates = ["romav1", "lightglue", "mast3r"]
+# This is not a pyproject optional-dependency extra.  Each external matcher
+# needs its own licence-reviewed install and checkpoint setup on the server.
+dependency_requirement = "external-installation-required"
+
+[manifests]
+# Set `frame_manifest` in a local run configuration only after publishing the
+# 300 selected dataset-relative frame IDs.  A completed run must derive and
+# record one parent manifest SHA-256 and two 150-frame shard SHA-256 values.
+# Do not copy historical server hashes here.
